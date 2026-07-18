@@ -6,7 +6,7 @@
   "scripts": {
     "build": "echo 'mobile: no build step in CI (use EAS)'",
     "dev": "expo start",
-    "lint": "eslint src app --ext .ts,.tsx",
+    "lint": "eslint src app --ext .ts,.tsx --no-error-on-unmatched-pattern",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
