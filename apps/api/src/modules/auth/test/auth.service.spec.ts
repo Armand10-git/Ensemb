@@ -11,9 +11,9 @@ import { RedisService } from '../../../common/redis.service';
  * Tests unitaires AuthService — logique metier uniquement (mocks).
  */
 
-const HASHED_PASSWORD = bcrypt.hashSync('CorrectPass!1', 10);
+let HASHED_PASSWORD: string;
 
-const MOCK_USER = {
+const MOCK_USER = () => ({
   id: 'user-uuid',
   organizationId: 'org-uuid',
   email: 'admin@demo.ensemb.cm',
@@ -30,18 +30,23 @@ const MOCK_USER = {
       },
     },
   ],
-};
+});
 
-const makePrismaMock = (userOverride?: Partial<typeof MOCK_USER> | null) => ({
+beforeAll(async () => {
+  HASHED_PASSWORD = await bcrypt.hash('CorrectPass!1', 10);
+});
+
+const makePrismaMock = (userOverride?: Record<string, unknown> | null) => ({
   user: {
     findFirst: jest.fn().mockResolvedValue(
-      userOverride === null ? null : { ...MOCK_USER, ...userOverride },
+      userOverride === null ? null : { ...MOCK_USER(), ...userOverride },
     ),
   },
 });
 
 const makeRedisMock = () => ({
   set: jest.fn().mockResolvedValue(undefined),
+  setNx: jest.fn().mockResolvedValue(true),
   get: jest.fn().mockResolvedValue(null),
   del: jest.fn().mockResolvedValue(undefined),
 });
@@ -111,7 +116,7 @@ describe('AuthService.login', () => {
 
   it('deduplique les permissions issues de plusieurs roles', async () => {
     const userWithDupePerms = {
-      ...MOCK_USER,
+      ...MOCK_USER(),
       roles: [
         { role: { permissions: [{ permission: { name: 'sales.view' } }] } },
         { role: { permissions: [{ permission: { name: 'sales.view' } }] } },
@@ -125,6 +130,16 @@ describe('AuthService.login', () => {
     );
 
     expect(result.permissions.filter((p: string) => p === 'sales.view')).toHaveLength(1);
+  });
+
+  it('email inexistant et mauvais mdp retournent le meme message (anti-enumeration)', async () => {
+    const serviceNoUser = await buildService(makePrismaMock(null), makeRedisMock());
+    const serviceWrongPw = await buildService(makePrismaMock(), makeRedisMock());
+
+    const errNoUser = await serviceNoUser.login({ email: 'x@x.cm', password: 'any' }, 'org').catch((e: UnauthorizedException) => e);
+    const errWrongPw = await serviceWrongPw.login({ email: 'admin@demo.ensemb.cm', password: 'bad' }, 'org-uuid').catch((e: UnauthorizedException) => e);
+
+    expect((errNoUser as UnauthorizedException).message).toBe((errWrongPw as UnauthorizedException).message);
   });
 });
 
@@ -144,13 +159,13 @@ describe('AuthService.logout', () => {
 });
 
 describe('AuthService.refresh', () => {
-  it('revoque ancien token et emet un nouveau pair', async () => {
+  it('revoque ancien token via setNx et emet un nouveau pair', async () => {
     const redisMock = makeRedisMock();
     const service = await buildService(makePrismaMock(), redisMock);
 
     const result = await service.refresh('user-uuid', 'org-uuid', 'admin@demo.ensemb.cm', 'old-token');
 
-    expect(redisMock.set).toHaveBeenCalledWith('blacklist:refresh:old-token', '1', expect.any(Number));
+    expect(redisMock.setNx).toHaveBeenCalledWith('blacklist:refresh:old-token', '1', expect.any(Number));
     expect(result.accessToken).toBeDefined();
     expect(result.refreshToken).toBeDefined();
   });

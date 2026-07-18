@@ -10,6 +10,13 @@ import type { JwtPayload } from './strategies/jwt.strategy';
 /** TTL du refresh token en secondes (7 jours). */
 const REFRESH_TTL_S = 7 * 24 * 60 * 60;
 
+/**
+ * Hash factice utilisé quand l'utilisateur est introuvable pour éviter le timing attack :
+ * bcrypt.compare s'exécute toujours, rendant les réponses "email inexistant" et
+ * "mauvais mot de passe" indiscernables en temps.
+ */
+const DUMMY_HASH = '$2b$12$dummy.hash.for.timing.attack.prevention.xxxxxxxxxxx';
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -47,11 +54,10 @@ export class AuthService {
       },
     });
 
-    // Réponse neutre — ne pas révéler si l'email existe
-    if (!user) throw new UnauthorizedException('Identifiants invalides.');
-
-    const passwordMatch = await bcrypt.compare(dto.password, user.password);
-    if (!passwordMatch) throw new UnauthorizedException('Identifiants invalides.');
+    // Toujours exécuter bcrypt.compare pour éviter le timing attack
+    // (un email inexistant et un mauvais mot de passe doivent prendre le même temps)
+    const passwordMatch = await bcrypt.compare(dto.password, user?.password ?? DUMMY_HASH);
+    if (!user || !passwordMatch) throw new UnauthorizedException('Identifiants invalides.');
 
     if (!user.isActive) {
       throw new UnauthorizedException('Ce compte est désactivé. Contactez votre administrateur.');
@@ -74,17 +80,18 @@ export class AuthService {
 
   /**
    * Émet un nouveau access token à partir d'un refresh token valide.
-   * Rotation : l'ancien refresh token est révoqué, un nouveau est émis.
+   * Rotation avec SET NX : si le token est déjà en blacklist (replay concurrent),
+   * la révocation est idempotente et le nouveau pair est quand même émis.
+   * La stratégie jwt-refresh a déjà vérifié l'absence du token en blacklist.
    */
   async refresh(userId: string, organizationId: string, email: string, oldRefreshToken: string): Promise<TokenPair> {
-    // Révoque l'ancien refresh token (rotation)
-    await this.redis.set(`blacklist:refresh:${oldRefreshToken}`, '1', REFRESH_TTL_S);
-
+    await this.redis.setNx(`blacklist:refresh:${oldRefreshToken}`, '1', REFRESH_TTL_S);
     return this.generateTokens({ sub: userId, organizationId, email });
   }
 
   /**
    * Révoque le refresh token (blacklist Redis) pour déconnecter la session.
+   * Le refreshToken est obligatoire — un logout sans token ne révoque rien.
    */
   async logout(refreshToken: string): Promise<void> {
     await this.redis.set(`blacklist:refresh:${refreshToken}`, '1', REFRESH_TTL_S);
