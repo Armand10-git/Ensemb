@@ -5,7 +5,8 @@
   "scripts": {
     "build": "echo 'database: no build (prisma generate handled by db:generate)'",
     "db:generate": "prisma generate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:integration": "jest --config jest.config.js"
   },
   "devDependencies": {
     "prisma": "^5.22.0",
