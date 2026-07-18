@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Ensemb",
+    "slug": "ensemb",
+    "version": "1.0.0",
+    "scheme": "ensemb",
+    "platforms": ["ios", "android"],
+    "newArchEnabled": true
+  }
+}

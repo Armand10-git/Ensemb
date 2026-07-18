@@ -1,0 +1,17 @@
+{
+  "name": "@ensemb/database",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo 'database: no build (prisma generate handled by db:generate)'",
+    "db:generate": "prisma generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

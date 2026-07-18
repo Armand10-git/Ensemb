@@ -1,0 +1,11 @@
+// Schéma Prisma — défini en détail lors des sessions Bloc B (S04+)
+// Voir docs/roadmap/01-architecture.md §4 pour le schéma complet
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
