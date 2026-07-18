@@ -30,15 +30,15 @@ Les phases P0–P14 (§13) donnent le grain macro ; cette section les subdivise 
 
 | # | Contenu | Fait quand… |
 |---|---|---|
-| S01 | Init Turborepo : `apps/api`, `apps/web`, `apps/mobile` (squelettes vides), `packages/config`, `database`, `types`, `ui`, `utils`, workspaces pnpm | `turbo build` tourne sans erreur sur des apps vides |
-| S02 | `docker-compose.yml` (Postgres + Redis) + `Dockerfile` multi-stage `api`/`web` | `docker-compose up` démarre, `apps/api` se connecte à Postgres et Redis |
-| S03 | CI (`ci.yml` : lint/typecheck/test/build) + Conventional Commits/husky/commitlint + protection de `main` | CI verte sur une PR de test |
+| S01 | Init Turborepo : `apps/api`, `apps/web`, `apps/mobile` (squelettes vides), `packages/config`, `database`, `types`, `ui`, `utils`, workspaces pnpm | `turbo build` tourne sans erreur sur des apps vides | ✅ 2026-07-18 |
+| S02 | `docker-compose.yml` (Postgres + Redis) + `Dockerfile` multi-stage `api`/`web` | `docker-compose up` démarre, `apps/api` se connecte à Postgres et Redis | ✅ 2026-07-18 |
+| S03 | CI (`ci.yml` : lint/typecheck/test/build) + Conventional Commits/husky/commitlint + protection de `main` | CI verte sur une PR de test | ✅ 2026-07-18 — PR `chore/s03-ci-commitlint`, 4 jobs verts. Dettes : lint-staged+prettier à câbler, config ESLint par workspace à structurer (packages/config/eslint). Protection `main` à finaliser (required checks) une fois les jobs enregistrés par GitHub. |
 
 ### Bloc B (= P1+P2) — Socle backend, auth, identité (dépend du Bloc A)
 
 | # | Contenu | Fait quand… |
 |---|---|---|
-| S04 | Schéma Prisma `User`, `Role`, `Permission`, `RoleOnUser`, `PermissionOnRole` (§4, avec `organizationId` sur `User`/`Role`) + migration initiale — dépend de `Organization` (T01) | `prisma migrate dev` passe, tables visibles |
+| S04 | Schéma Prisma `User`, `Role`, `Permission`, `RoleOnUser`, `PermissionOnRole` (§4, avec `organizationId` sur `User`/`Role`) + migration initiale — dépend de `Organization` (T01) | `prisma migrate dev` passe, tables visibles | ✅ 2026-07-19 — migration `20260718225308_add_user_role_permission`, 3 tests d'intégration verts (création User+Role+RoleOnUser, même email dans 2 orgs OK, doublon email même org rejeté). |
 | S05 | Seed : catalogue de permissions (global), rôle admin, utilisateur admin pour une organisation de démonstration (§4) | Un admin peut être créé par script, mot de passe hashé |
 | S06 | `AuthModule` : login JWT access+refresh, guard `isActive`, blacklist Redis, scoping par organisation | Flow §18.1 étapes 1-3 et 6 fonctionnels |
 | S07 | `RolesModule` + `PermissionGuard` + `@RequirePermission()` + interceptor `records.viewAll` | Un endpoint protégé refuse sans permission ; flow §18.11 point 4 vérifiable |
@@ -49,7 +49,7 @@ Les phases P0–P14 (§13) donnent le grain macro ; cette section les subdivise 
 
 | # | Contenu | Fait quand… |
 |---|---|---|
-| T01 | Schéma `Organization` + `PlatformAdmin` (§4), migration initiale | Table créée, contrainte d'unicité du sous-domaine testée — **doit précéder S04** |
+| T01 | Schéma `Organization` + `PlatformAdmin` (§4), migration initiale | Table créée, contrainte d'unicité du sous-domaine testée — **doit précéder S04** | ✅ 2026-07-18 — PR `feat/t01-organization-schema`, 3 tests d'intégration verts contre Postgres. Note : test:integration non câblé en CI (service postgres à ajouter en S04+). |
 | T02 | `TenancyModule` : middleware de résolution de tenant par sous-domaine, contexte de requête (`AsyncLocalStorage`), extension Prisma d'auto-scoping par `organizationId` | Une requête sur un sous-domaine ne retourne jamais les données d'un autre tenant (test d'isolation) |
 | T03 | Row-Level Security PostgreSQL en défense en profondeur (policy `organization_id = current_setting(...)`) | Une requête SQL brute sans passer par Prisma respecte quand même l'isolation |
 | T04 | Flow d'inscription (§18.0) : création `Organization` + premier utilisateur admin + validation de disponibilité du sous-domaine ; calcul de `trialEndsAt` selon la fenêtre de lancement (voir T06) | Un nouveau tenant est immédiatement utilisable après inscription, avec un plan d'essai |
