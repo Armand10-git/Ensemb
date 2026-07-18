@@ -5,3 +5,8 @@ build
 .env
 .env.local
 *.log
+
+# Fichiers internes Claude Code — ne pas versionner
+CLAUDE.md
+PROMPTS.md
+docs/
