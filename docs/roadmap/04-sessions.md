@@ -39,7 +39,7 @@ Les phases P0–P14 (§13) donnent le grain macro ; cette section les subdivise 
 | # | Contenu | Fait quand… |
 |---|---|---|
 | S04 | Schéma Prisma `User`, `Role`, `Permission`, `RoleOnUser`, `PermissionOnRole` (§4, avec `organizationId` sur `User`/`Role`) + migration initiale — dépend de `Organization` (T01) | `prisma migrate dev` passe, tables visibles | ✅ 2026-07-19 — migration `20260718225308_add_user_role_permission`, 3 tests d'intégration verts (création User+Role+RoleOnUser, même email dans 2 orgs OK, doublon email même org rejeté). |
-| S05 | Seed : catalogue de permissions (global), rôle admin, utilisateur admin pour une organisation de démonstration (§4) | Un admin peut être créé par script, mot de passe hashé |
+| S05 | Seed : catalogue de permissions (global), rôle admin, utilisateur admin pour une organisation de démonstration (§4) | Un admin peut être créé par script, mot de passe hashé | ✅ 2026-07-19 — `packages/database/prisma/seed.ts` idempotent : 108 permissions, organisation démo, rôle Administrateur (toutes permissions), utilisateur `admin@demo.ensemb.cm` (bcrypt coût 12). |
 | S06 | `AuthModule` : login JWT access+refresh, guard `isActive`, blacklist Redis, scoping par organisation | Flow §18.1 étapes 1-3 et 6 fonctionnels |
 | S07 | `RolesModule` + `PermissionGuard` + `@RequirePermission()` + interceptor `records.viewAll` | Un endpoint protégé refuse sans permission ; flow §18.11 point 4 vérifiable |
 | S08 | `HealthModule` (`/health`,`/ready`) + `RealtimeModule` minimal (Gateway Socket.io, connexion authentifiée seulement, rooms scopées par organisation) | Probes OK ; un client socket authentifié se connecte |
