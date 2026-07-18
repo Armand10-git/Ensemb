@@ -30,6 +30,9 @@ model Organization {
   createdAt    DateTime           @default(now())
   deletedAt    DateTime?
 
+  users User[]
+  roles Role[]
+
   @@map("organizations")
 }
 
@@ -42,4 +45,89 @@ model PlatformAdmin {
   createdAt DateTime @default(now())
 
   @@map("platform_admins")
+}
+
+// ─── Identité & contrôle d'accès ─────────────────────────────────────────────
+
+/// Référentiel global des permissions — non scopé par organisation.
+model Permission {
+  id    String  @id @default(uuid()) @db.Uuid
+  /// Clé technique unique, ex. "invoices.create"
+  name  String  @unique
+  /// Libellé lisible pour l'UI d'administration
+  label String?
+
+  roles PermissionOnRole[]
+
+  @@map("permissions")
+}
+
+/// Utilisateur appartenant à un tenant (scopé par organizationId).
+model User {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  firstname      String
+  lastname       String
+  email          String
+  username       String
+  /// Mot de passe hashé (bcrypt)
+  password       String
+  avatar         String?
+  phone          String?
+  /// false = compte désactivé (soft-disable sans suppression)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  roles        RoleOnUser[]
+
+  /// Un email est unique au sein d'un tenant, pas globalement.
+  @@unique([organizationId, email])
+  /// Un username est unique au sein d'un tenant.
+  @@unique([organizationId, username])
+  @@map("users")
+}
+
+/// Rôle nommé, scopé par organisation.
+model Role {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  label          String?
+  description    String?
+  /// false = rôle désactivé
+  status         Boolean  @default(true)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  permissions  PermissionOnRole[]
+  users        RoleOnUser[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+/// Table de jonction User ↔ Role (relation N:N).
+model RoleOnUser {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+  @@map("roles_on_users")
+}
+
+/// Table de jonction Role ↔ Permission (relation N:N).
+model PermissionOnRole {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("permissions_on_roles")
 }
