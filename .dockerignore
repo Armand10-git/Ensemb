@@ -1,0 +1,14 @@
+# Exclure les dossiers de build et caches — mais PAS node_modules (copié dans l'image)
+.git
+.turbo
+*.log
+.env
+.env.local
+
+# Exclure les dist des packages (seuls apps/api/dist et apps/web/dist sont copiés explicitement)
+packages/*/dist
+apps/mobile
+
+# Exclure les node_modules des sous-packages (le root node_modules hoisted est utilisé)
+apps/*/node_modules
+packages/*/node_modules
