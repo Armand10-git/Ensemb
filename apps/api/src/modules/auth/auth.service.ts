@@ -15,7 +15,10 @@ const REFRESH_TTL_S = 7 * 24 * 60 * 60;
  * bcrypt.compare s'exécute toujours, rendant les réponses "email inexistant" et
  * "mauvais mot de passe" indiscernables en temps.
  */
-const DUMMY_HASH = '$2b$12$dummy.hash.for.timing.attack.prevention.xxxxxxxxxxx';
+// Hash bcrypt valide (cost 12) utilisé quand l'utilisateur est introuvable.
+// Permet à bcrypt.compare() de s'exécuter sans throw, rendant les réponses
+// "email inexistant" et "mauvais mot de passe" indiscernables en temps.
+const DUMMY_HASH = '$2b$12$tm1bnktiT7GAWx2VvNLepO3dSC7nmSTP1qKJWb4F2GA4/6xUVYD2O';
 
 export interface TokenPair {
   accessToken: string;
