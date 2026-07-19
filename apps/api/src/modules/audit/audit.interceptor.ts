@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { Observable, tap } from 'rxjs';
+import { from, Observable, of } from 'rxjs';
+import { catchError, switchMap, tap } from 'rxjs/operators';
 import { AUDITABLE_KEY, type AuditableMetadata } from './auditable.decorator';
 import { AuditService } from './audit.service';
 import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
@@ -16,11 +17,18 @@ interface AuthRequest extends Request {
   user?: AuthenticatedUser;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Interceptor global branché via APP_INTERCEPTOR.
  * Se déclenche uniquement sur les handlers décorés par @Auditable.
- * La persistence est lancée en fire-and-forget après la réponse —
- * un échec n'impacte jamais le client.
+ *
+ * Flux :
+ *  1. Lecture de l'entité avant la mutation (champ `before`) si un :id est présent.
+ *  2. Exécution du handler.
+ *  3. Persistence asynchrone (fire-and-forget) de l'AuditLog avec before + after.
+ *
+ * Un échec à n'importe quelle étape de l'audit n'impacte jamais le client.
  */
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
@@ -41,58 +49,91 @@ export class AuditInterceptor implements NestInterceptor {
 
     const req = context.switchToHttp().getRequest<AuthRequest>();
     const user = req.user;
+    const paramId = req.params['id'] as string | undefined;
+    const validParamId = paramId && UUID_REGEX.test(paramId) ? paramId : undefined;
 
-    return next.handle().pipe(
-      tap((responseBody: unknown) => {
-        // Extraction de l'entityId : prefer l'id dans la réponse, sinon le param de route
-        const entityId = extractEntityId(responseBody) ?? (req.params['id'] as string | undefined);
+    // Lecture pre-mutation — absorbée si le modèle n'existe pas ou si DB en erreur
+    const before$ = validParamId
+      ? from(this.auditService.fetchEntitySnapshot(metadata.entity, validParamId)).pipe(
+          catchError(() => of(null)),
+        )
+      : of(null);
 
-        // Lancement asynchrone — on ne await pas intentionnellement
-        // Le .catch est obligatoire : une rejection void non catchée remonte dans RxJS
-        void this.auditService
-          .create({
-            organizationId: user?.organizationId ?? null,
-            actorType: user ? 'USER' : 'SYSTEM',
-            actorId: user?.id ?? null,
-            action: metadata.action,
-            entity: metadata.entity,
-            entityId: entityId ?? null,
-            after: sanitize(responseBody),
-          })
-          .catch(() => {
-            // Déjà loggé dans AuditService.create — on absorbe ici pour ne jamais impacter le client
-          });
-      }),
+    return before$.pipe(
+      switchMap((beforeState) =>
+        next.handle().pipe(
+          tap((responseBody: unknown) => {
+            const entityId =
+              extractEntityId(responseBody) ?? validParamId ?? null;
+
+            // Fire-and-forget : .catch() obligatoire pour éviter une unhandledRejection dans RxJS
+            void this.auditService
+              .create({
+                organizationId: user?.organizationId ?? null,
+                actorType: user ? 'USER' : 'SYSTEM',
+                actorId: user?.id ?? null,
+                action: metadata.action,
+                entity: metadata.entity,
+                entityId,
+                before: sanitize(beforeState),
+                after: sanitize(responseBody),
+              })
+              .catch(() => {
+                // Deja logge dans AuditService.create
+              });
+          }),
+        ),
+      ),
     );
   }
 }
 
 /**
- * Extrait l'id de la ressource depuis le corps de la réponse si disponible.
+ * Extrait l'id UUID d'une ressource depuis le corps de la réponse.
+ * Valide le format UUID pour ne pas persister un id malformé.
  */
 function extractEntityId(body: unknown): string | undefined {
   if (body !== null && typeof body === 'object' && 'id' in body) {
     const id = (body as Record<string, unknown>)['id'];
-    return typeof id === 'string' ? id : undefined;
+    if (typeof id === 'string' && UUID_REGEX.test(id)) return id;
   }
   return undefined;
 }
 
+const FORBIDDEN = new Set([
+  'password',
+  'passwordHash',
+  'refreshToken',
+  'accessToken',
+  'token',
+  'secret',
+]);
+
 /**
- * Supprime les champs sensibles avant persistence (pas de password, token…).
- * Le cast final est safe car un objet JSON plain satisfait InputJsonValue.
+ * Supprime récursivement les champs sensibles avant persistence.
+ * Gère les objets imbriqués et les tableaux.
+ * Le cast final vers InputJsonValue est safe : la valeur est un plain JSON.
  */
 function sanitize(value: unknown): Prisma.InputJsonValue | null {
   if (value === null || value === undefined) return null;
-  if (typeof value !== 'object') return null;
 
-  const FORBIDDEN = new Set(['password', 'passwordHash', 'refreshToken', 'accessToken', 'token', 'secret']);
-  const result: Record<string, unknown> = {};
-
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (!FORBIDDEN.has(k)) {
-      result[k] = v;
-    }
+  if (Array.isArray(value)) {
+    return value.map(sanitize) as Prisma.InputJsonValue;
   }
-  return result as Prisma.InputJsonValue;
+
+  if (typeof value === 'object') {
+    const result: Record<string, Prisma.InputJsonValue | null> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (!FORBIDDEN.has(k)) {
+        result[k] = sanitize(v);
+      }
+    }
+    return result as Prisma.InputJsonValue;
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  return null;
 }
