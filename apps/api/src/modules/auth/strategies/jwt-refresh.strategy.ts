@@ -30,6 +30,10 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     const blacklisted = await this.redis.get(`blacklist:refresh:${token}`);
     if (blacklisted) throw new UnauthorizedException('Session révoquée.');
 
+    // Vérifie si l'organisation a été suspendue par le staff plateforme (T08)
+    const orgSuspended = await this.redis.get(`platform:org-suspended:${payload.organizationId}`);
+    if (orgSuspended) throw new UnauthorizedException('Compte suspendu.');
+
     const user = await this.prisma.user.findFirst({
       where: { id: payload.sub, organizationId: payload.organizationId, deletedAt: null },
       select: { id: true, organizationId: true, email: true, isActive: true },

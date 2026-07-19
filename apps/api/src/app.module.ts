@@ -15,6 +15,7 @@ import { RegistrationModule } from './modules/registration/registration.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { SmtpModule } from './modules/smtp/smtp.module';
+import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { SmtpModule } from './modules/smtp/smtp.module';
     OrganizationsModule,
     BillingModule,
     SmtpModule,
+    PlatformAdminModule,
   ],
 })
 export class AppModule {}

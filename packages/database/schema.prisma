@@ -182,11 +182,18 @@ model SmtpServer {
 
 /// Compte staff plateforme — auth séparée de celle des utilisateurs tenant.
 model PlatformAdmin {
-  id        String   @id @default(uuid()) @db.Uuid
-  email     String   @unique
-  /// Mot de passe hashé (bcrypt)
-  password  String
-  createdAt DateTime @default(now())
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String   @unique
+  /// Mot de passe hashé (bcrypt cost 12)
+  password    String
+  /// Secret TOTP chiffré AES-256-GCM via EncryptionService. Null si TOTP pas encore configuré.
+  totpSecret  String?
+  /// True dès que le TOTP a été vérifié une première fois (setup confirmé).
+  totpEnabled Boolean  @default(false)
+  /// False = compte désactivé, 401 générique au login.
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@map("platform_admins")
 }

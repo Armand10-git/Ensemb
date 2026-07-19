@@ -21,12 +21,14 @@ export const PRISMA_TENANT_CLIENT = 'PRISMA_TENANT_CLIENT';
  * /health et /ready sont appelés sans préfixe par l'orchestrateur.
  * /api/v1/auth/* sont des endpoints publics d'authentification.
  * /api/v1/public/* est l'endpoint de résolution de tenant pour le mobile.
+ * /api/v1/platform-admin/* est la console plateforme — auth séparée, jamais via un tenant.
  */
 const EXEMPT_ROUTES = [
   { path: 'health', method: RequestMethod.GET },
   { path: 'ready', method: RequestMethod.GET },
   { path: 'api/v1/auth/(.*)', method: RequestMethod.ALL },
   { path: 'api/v1/public/(.*)', method: RequestMethod.ALL },
+  { path: 'api/v1/platform-admin/(.*)', method: RequestMethod.ALL },
 ];
 
 @Module({
