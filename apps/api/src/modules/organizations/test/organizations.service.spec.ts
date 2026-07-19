@@ -43,7 +43,7 @@ describe('OrganizationsService', () => {
     const result = await service.updateBranding(ORG_ID, { logoUrl: 'https://cdn.example.com/logo.png' });
 
     expect(mockPrisma.organization.update).toHaveBeenCalledWith({
-      where: { id: ORG_ID },
+      where: { id: ORG_ID, deletedAt: null },
       data: { logoUrl: 'https://cdn.example.com/logo.png' },
       select: { logoUrl: true, primaryColor: true },
     });
@@ -61,7 +61,7 @@ describe('OrganizationsService', () => {
     const result = await service.updateBranding(ORG_ID, { primaryColor: '#3B82F6' });
 
     expect(mockPrisma.organization.update).toHaveBeenCalledWith({
-      where: { id: ORG_ID },
+      where: { id: ORG_ID, deletedAt: null },
       data: { primaryColor: '#3B82F6' },
       select: { logoUrl: true, primaryColor: true },
     });
@@ -81,7 +81,7 @@ describe('OrganizationsService', () => {
     });
 
     expect(mockPrisma.organization.update).toHaveBeenCalledWith({
-      where: { id: ORG_ID },
+      where: { id: ORG_ID, deletedAt: null },
       data: { logoUrl: 'https://cdn.example.com/logo.png', primaryColor: '#FFFFFF' },
       select: { logoUrl: true, primaryColor: true },
     });

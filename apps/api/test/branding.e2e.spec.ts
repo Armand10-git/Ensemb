@@ -215,7 +215,12 @@ describe('OrganizationsController (e2e) — branding', () => {
   // ─── GET /api/v1/public/organizations/by-subdomain/:subdomain ──────────────
 
   it('GET by-subdomain retourne logoUrl et primaryColor après mise à jour', async () => {
-    // tenant1 a reçu son branding dans le test PATCH ci-dessus
+    // Applique le branding directement en base pour ne pas dépendre du test PATCH ci-dessus
+    await prisma.organization.update({
+      where: { id: tenant1.orgId },
+      data: { logoUrl: 'https://cdn.example.com/logo.png', primaryColor: '#3B82F6' },
+    });
+
     const res = await request(app.getHttpServer())
       .get(`/api/v1/public/organizations/by-subdomain/${PREFIX}-t1`)
       .expect(200);

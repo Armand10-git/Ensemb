@@ -44,7 +44,7 @@ export class TenancyService {
     subdomain: string,
   ): Promise<{ organizationId: string; logoUrl: string | null; primaryColor: string | null } | null> {
     const org = await this.prisma.organization.findUnique({
-      where: { subdomain },
+      where: { subdomain, deletedAt: null },
       select: { id: true, logoUrl: true, primaryColor: true },
     });
 

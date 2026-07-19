@@ -34,7 +34,7 @@ export class OrganizationsService {
     if (dto.primaryColor !== undefined) data.primaryColor = dto.primaryColor;
 
     const updated = await this.prisma.organization.update({
-      where: { id: organizationId },
+      where: { id: organizationId, deletedAt: null },
       data,
       select: { logoUrl: true, primaryColor: true },
     });
@@ -45,7 +45,7 @@ export class OrganizationsService {
     };
 
     this.realtimeGateway.server
-      .to(`org:${organizationId}`)
+      ?.to(`org:${organizationId}`)
       .emit('organization:brandingUpdated', result);
 
     return result;
