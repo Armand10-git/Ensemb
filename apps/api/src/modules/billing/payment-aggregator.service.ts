@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, timingSafeEqual } from 'crypto';
-import { randomUUID } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { Decimal } from '@prisma/client/runtime/library';
 
 export interface PaymentLinkParams {
@@ -48,7 +47,9 @@ export class PaymentAggregatorService {
 
     // Appel réel à l'agrégateur (ex. CinetPay, Monetbil…)
     // La réponse est une URL de paiement hébergée par l'agrégateur.
-    const response = await fetch('https://api.aggregateur.example/payment/init', {
+    const baseUrl = this.config.get<string>('PAYMENT_AGGREGATOR_BASE_URL')
+      ?? 'https://api.cinetpay.com/v2';
+    const response = await fetch(`${baseUrl}/payment/init`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -57,7 +58,8 @@ export class PaymentAggregatorService {
       body: JSON.stringify({
         site_id: this.siteId,
         transaction_id: params.reference,
-        amount: params.amount.toNumber(),
+        // Montant en string pour préserver la précision Decimal (jamais Float)
+        amount: params.amount.toString(),
         currency: params.currency,
         notify_url: params.callbackUrl,
       }),

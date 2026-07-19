@@ -7,17 +7,19 @@ import { BillingController } from './billing.controller';
 import { WebhookController } from './webhook.controller';
 import { QuotaGuard } from './quota.guard';
 import { PaymentAggregatorService } from './payment-aggregator.service';
-import { BillingWorker } from '../../workers/billing.worker';
+
+// BillingWorker n'est pas ici : il tourne dans un process worker dédié (§17 point Z).
+// Voir apps/api/src/worker.ts et apps/api/src/workers/worker.module.ts.
 
 @Module({
   imports: [
     PrismaModule,
     RealtimeModule,
-    // File BullMQ dédiée à la facturation — connexion Redis via REDIS_URL (ConfigModule global)
+    // File BullMQ — les jobs sont PRODUITS ici (BillingService) et CONSOMMÉS dans le worker dédié
     BullModule.registerQueue({ name: 'billing' }),
   ],
   controllers: [BillingController, WebhookController],
-  providers: [BillingService, PaymentAggregatorService, QuotaGuard, BillingWorker],
+  providers: [BillingService, PaymentAggregatorService, QuotaGuard],
   exports: [BillingService, QuotaGuard],
 })
 export class BillingModule {}

@@ -79,18 +79,32 @@ export class WebhookController {
       return { received: true };
     }
 
-    // 3. Persistance du WebhookEvent avec contrainte d'unicité — garde d'idempotence
-    let isNew = false;
+    // 3. Résolution de l'organizationId via l'invoiceId (scope tenant sur le WebhookEvent)
+    let organizationId: string | null = null;
+    if (payload.invoiceId) {
+      const inv = await this.prisma.invoice.findUnique({
+        where: { id: payload.invoiceId },
+        select: { organizationId: true },
+      });
+      organizationId = inv?.organizationId ?? null;
+    }
+
+    // 4. Persistance du WebhookEvent avec contrainte d'unicité — garde d'idempotence
+    let webhookEventId: string | undefined;
     try {
-      await this.prisma.webhookEvent.create({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const evt = await (this.prisma.webhookEvent.create as (args: any) => Promise<{ id: string }>)({
         data: {
           provider,
           providerEventId,
           payload: payload as object,
           invoiceId: payload.invoiceId ?? null,
+          // organizationId : champ ajouté par migration 20260719200000 — types à régénérer après apply
+          organizationId,
         },
+        select: { id: true },
       });
-      isNew = true;
+      webhookEventId = evt.id;
     } catch (err: unknown) {
       // P2002 = violation de contrainte unique → événement déjà traité
       if (this.isPrismaUniqueViolation(err)) {
@@ -102,8 +116,8 @@ export class WebhookController {
       return { received: true };
     }
 
-    // 4. Traitement métier — uniquement si l'événement est nouveau
-    if (isNew && type === 'payment.success') {
+    // 5. Traitement métier
+    if (type === 'payment.success') {
       const invoiceId = payload.invoiceId;
       if (!invoiceId) {
         this.logger.warn(`Webhook payment.success sans invoiceId — ${providerEventId}`);
@@ -117,6 +131,15 @@ export class WebhookController {
         // Erreur loggée côté serveur — on ne l'expose pas et on ne déclenche pas de retry
         this.logger.error(`Erreur lors de la confirmation du paiement Invoice ${invoiceId}`, err);
       }
+    }
+
+    // 6. Marque le WebhookEvent comme traité (best-effort, ne bloque pas la réponse)
+    if (webhookEventId) {
+      this.prisma.webhookEvent
+        .update({ where: { id: webhookEventId }, data: { processedAt: new Date() } })
+        .catch((err: unknown) =>
+          this.logger.error(`Impossible de mettre à jour processedAt pour ${webhookEventId}`, err),
+        );
     }
 
     return { received: true };

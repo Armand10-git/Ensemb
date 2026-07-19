@@ -18,6 +18,19 @@ interface JwtPayload {
   email: string;
 }
 
+// Même règle d'origine que le serveur HTTP (main.ts) — sous-domaines *.monapp.cm + localhost dev
+const wsOriginFilter = (
+  origin: string | undefined,
+  callback: (err: Error | null, allow?: boolean) => void,
+): void => {
+  if (!origin) return callback(null, true); // outils CLI / Postman
+  const allowed = /^https?:\/\/([a-z0-9-]+\.)?monapp\.cm(:\d+)?$|^http:\/\/localhost(:\d+)?$/;
+  callback(
+    allowed.test(origin) ? null : new Error('CORS WebSocket non autorisé'),
+    allowed.test(origin),
+  );
+};
+
 /**
  * Gateway Socket.io minimal — authentification JWT + rooms par organisation.
  *
@@ -28,7 +41,7 @@ interface JwtPayload {
  *   - Joint la room `org:<organizationId>` (isolation multi-tenant)
  *   - Déconnecte immédiatement en cas de token absent ou invalide
  */
-@WebSocketGateway({ namespace: '/realtime', cors: { origin: '*', credentials: true } })
+@WebSocketGateway({ namespace: '/realtime', cors: { origin: wsOriginFilter, credentials: true } })
 export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {

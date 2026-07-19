@@ -1,4 +1,4 @@
-import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 import { BillingService } from '../billing.service';
 
@@ -200,6 +200,15 @@ describe('BillingService', () => {
         expect.objectContaining({
           data: expect.objectContaining({ paymentLink: 'https://pay.test/mock-uuid' }),
         }),
+      );
+    });
+
+    it('lève UnprocessableEntityException si planId ne correspond pas au plan actuel', async () => {
+      const { service } = makeService();
+      const wrongPlanId = 'aaaaaaaa-0000-4000-a000-000000000099';
+
+      await expect(service.createPaymentLink(ORG_ID, wrongPlanId, 'monthly')).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
       );
     });
   });

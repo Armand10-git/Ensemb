@@ -89,7 +89,7 @@ export class BillingWorker extends WorkerHost {
       const { invoiceId, paymentUrl } = await this.billingService.createPaymentLink(
         organizationId,
         planId,
-        period as 'monthly' | 'annual',
+        period,
       );
 
       // Stub email — remplacer par NotificationsModule (S30b ou ultérieur)
@@ -110,11 +110,9 @@ export class BillingWorker extends WorkerHost {
     const { organizationId } = data;
 
     try {
-      const subscriptionBefore = await this.billingService.getSubscription(organizationId);
-      await this.billingService.checkTrialCap(organizationId);
-      const subscriptionAfter = await this.billingService.getSubscription(organizationId);
+      const capReached = await this.billingService.checkTrialCap(organizationId);
 
-      if (subscriptionBefore.status === 'TRIALING' && subscriptionAfter.status === 'PAST_DUE') {
+      if (capReached) {
         this.realtimeGateway.server
           ?.to(`org:${organizationId}`)
           .emit('organization:trialCapReached', { organizationId });

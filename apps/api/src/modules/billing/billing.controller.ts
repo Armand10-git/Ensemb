@@ -44,7 +44,7 @@ export class BillingController {
   ): Promise<{ invoiceId: string; paymentUrl: string }> {
     const result = SubscribeSchema.safeParse(body);
     if (!result.success) {
-      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+      throw new UnprocessableEntityException('Données de souscription invalides.');
     }
 
     const { organizationId } = req.user;
