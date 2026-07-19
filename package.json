@@ -25,6 +25,16 @@
     "turbo": "^2.5.4",
     "typescript": "^5.8.3"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "@nestjs/core",
+      "esbuild",
+      "unrs-resolver"
+    ]
+  },
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"

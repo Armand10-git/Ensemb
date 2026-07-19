@@ -50,8 +50,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Génère le client Prisma avant le typecheck (types nécessaires pour @prisma/client)
-      - run: pnpm --filter @ensemb/database exec prisma generate
+      # Génère le client Prisma (types nécessaires pour tsc)
+      - run: pnpm --filter @ensemb/database run db:generate
 
       - run: pnpm typecheck
 
@@ -73,8 +73,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Génère le client Prisma avant les tests (types nécessaires pour ts-jest)
-      - run: pnpm --filter @ensemb/database exec prisma generate
+      # Génère le client Prisma (types et binaire nécessaires pour ts-jest)
+      - run: pnpm --filter @ensemb/database run db:generate
 
       - run: pnpm test:unit
 
@@ -96,7 +96,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Génère le client Prisma avant le build TypeScript de l'API
-      - run: pnpm --filter @ensemb/database exec prisma generate
+      # Génère le client Prisma avant la compilation TypeScript de l'API
+      - run: pnpm --filter @ensemb/database run db:generate
 
       - run: pnpm build
