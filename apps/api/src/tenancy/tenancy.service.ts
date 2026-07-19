@@ -34,4 +34,26 @@ export class TenancyService {
     await this.redis.set(cacheKey, org.id, SUBDOMAIN_CACHE_TTL_SECONDS);
     return org.id;
   }
+
+  /**
+   * Résout un sous-domaine en données publiques de l'organisation.
+   * Retourne null si le sous-domaine est inconnu.
+   * N'expose aucun champ sensible (statut billing, secrets, etc.).
+   */
+  async resolvePublicOrganization(
+    subdomain: string,
+  ): Promise<{ organizationId: string; logoUrl: string | null; primaryColor: string | null } | null> {
+    const org = await this.prisma.organization.findUnique({
+      where: { subdomain },
+      select: { id: true, logoUrl: true, primaryColor: true },
+    });
+
+    if (!org) return null;
+
+    return {
+      organizationId: org.id,
+      logoUrl: org.logoUrl ?? null,
+      primaryColor: org.primaryColor ?? null,
+    };
+  }
 }
