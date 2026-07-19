@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './common/prisma.module';
 import { RedisModule } from './common/redis.module';
+import { EncryptionModule } from './common/encryption.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -13,6 +14,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { RegistrationModule } from './modules/registration/registration.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { SmtpModule } from './modules/smtp/smtp.module';
 
 @Module({
   imports: [
@@ -28,6 +30,7 @@ import { BillingModule } from './modules/billing/billing.module';
     }),
     PrismaModule,
     RedisModule,
+    EncryptionModule,
     TenancyModule,
     HealthModule,
     AuthModule,
@@ -37,6 +40,7 @@ import { BillingModule } from './modules/billing/billing.module';
     RegistrationModule,
     OrganizationsModule,
     BillingModule,
+    SmtpModule,
   ],
 })
 export class AppModule {}

@@ -3,6 +3,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
@@ -18,7 +19,7 @@ export interface BillingJobData {
   organizationId: string;
   invoiceId?: string;
   planId?: string;
-  period?: string;
+  period?: 'monthly' | 'annual';
 }
 
 const MS_24H = 24 * 60 * 60 * 1000;
@@ -103,6 +104,14 @@ export class BillingService {
   ): Promise<{ invoiceId: string; paymentUrl: string }> {
     const subscription = await this.getSubscription(organizationId);
 
+    // Le planId fourni doit correspondre au plan actif — les changements de plan passent
+    // par un endpoint dédié (non encore implémenté, prévu post-T07).
+    if (planId !== subscription.planId) {
+      throw new UnprocessableEntityException(
+        'Ce plan ne correspond pas à votre abonnement actuel. Contactez le support pour changer de plan.',
+      );
+    }
+
     const amount = period === 'annual'
       ? subscription.plan.priceAnnual
       : subscription.plan.priceMonthly;
@@ -137,7 +146,7 @@ export class BillingService {
 
     await this.billingQueue.add(
       'invoice.expire',
-      { invoiceId: invoice.id, organizationId, planId, period },
+      { invoiceId: invoice.id, organizationId, planId: subscription.planId, period },
       { delay: MS_24H },
     );
 
@@ -168,7 +177,10 @@ export class BillingService {
     }
 
     const periodMs = invoice.period === 'annual' ? MS_365D : MS_30D;
-    const newPeriodEnd = new Date(Date.now() + periodMs);
+    // Si le paiement arrive avant la fin de la période courante (renouvellement anticipé),
+    // la nouvelle période commence à la fin de la période courante. Sinon, elle commence maintenant.
+    const base = Math.max(Date.now(), invoice.subscription.currentPeriodEnd.getTime());
+    const newPeriodEnd = new Date(base + periodMs);
 
     await this.prisma.$transaction([
       this.prisma.invoice.update({
@@ -182,14 +194,15 @@ export class BillingService {
     ]);
 
     // Job de renouvellement 7 jours avant la prochaine échéance
+    const renewDelay = Math.max(0, periodMs - MS_7D);
     await this.billingQueue.add(
       'invoice.renew',
       {
         organizationId: invoice.organizationId,
         planId: invoice.subscription.planId,
-        period: invoice.period,
+        period: invoice.period as 'monthly' | 'annual',
       },
-      { delay: periodMs - MS_7D },
+      { delay: renewDelay },
     );
   }
 
@@ -199,16 +212,17 @@ export class BillingService {
    * Appelé par le job billing.checkTrialCap.
    *
    * @param organizationId - tenant à vérifier
+   * @returns true si le plafond a été atteint et la subscription dégradée, false sinon
    */
-  async checkTrialCap(organizationId: string): Promise<void> {
+  async checkTrialCap(organizationId: string): Promise<boolean> {
     const subscription = await this.getSubscription(organizationId);
 
     // Hors essai ou déjà dégradé — rien à faire
-    if (subscription.status !== 'TRIALING') return;
+    if (subscription.status !== 'TRIALING') return false;
 
     const capAmount = subscription.plan.trialRevenueCapAmount;
     // Plan sans plafond (fenêtre de lancement ou enterprise) — rien à faire
-    if (!capAmount) return;
+    if (!capAmount) return false;
 
     // CA cumulé = somme des ventes validées depuis l'inscription
     // Note : Sale n'existe pas encore (Bloc C) — on aggrège sur les invoices PAID de l'org
@@ -234,7 +248,11 @@ export class BillingService {
         where: { id: organizationId },
         data: { trialEndedReason: 'REVENUE_CAP' },
       });
+
+      return true;
     }
+
+    return false;
   }
 
   /**

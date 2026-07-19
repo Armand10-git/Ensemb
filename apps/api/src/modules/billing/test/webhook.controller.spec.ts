@@ -32,21 +32,34 @@ const makeBillingService = (overrides: { confirmPayment?: jest.Mock } = {}) => (
 const P2002 = Object.assign(new Error('Unique constraint'), { code: 'P2002' });
 
 const makeWebhookEvent = () => ({
-  create: jest.fn().mockResolvedValue({}),
+  create: jest.fn().mockResolvedValue({ id: 'evt-uuid-mock' }),
+  update: jest.fn().mockResolvedValue({}),
 });
 
-const makePrisma = (webhookEvent = makeWebhookEvent()) => ({
+const makeInvoice = () => ({
+  findUnique: jest.fn().mockResolvedValue({ organizationId: 'org-uuid-mock' }),
+});
+
+const makePrisma = (
+  webhookEvent = makeWebhookEvent(),
+  invoice = makeInvoice(),
+) => ({
   webhookEvent,
+  invoice,
 });
 
 const makeController = (opts: {
   signatureValid?: boolean;
   confirmPayment?: jest.Mock;
   prismaWebhookEvent?: ReturnType<typeof makeWebhookEvent>;
+  prismaInvoice?: ReturnType<typeof makeInvoice>;
 } = {}) => {
   const aggregator = makeAggregator(opts.signatureValid ?? true);
   const billing = makeBillingService({ confirmPayment: opts.confirmPayment });
-  const prisma = makePrisma(opts.prismaWebhookEvent ?? makeWebhookEvent());
+  const prisma = makePrisma(
+    opts.prismaWebhookEvent ?? makeWebhookEvent(),
+    opts.prismaInvoice ?? makeInvoice(),
+  );
   const controller = new WebhookController(
     aggregator as never,
     billing as never,
@@ -98,7 +111,10 @@ describe('WebhookController', () => {
 
     it('retourne 200 immédiatement si l\'événement est rejoué (P2002)', async () => {
       const confirmPayment = makeConfirmPayment();
-      const prismaWebhookEvent = { create: jest.fn().mockRejectedValue(P2002) };
+      const prismaWebhookEvent = {
+        create: jest.fn().mockRejectedValue(P2002),
+        update: jest.fn().mockResolvedValue({}),
+      };
       const { controller } = makeController({ confirmPayment, prismaWebhookEvent });
       const req = makeRequest(makeRawBody(VALID_PAYLOAD));
 
@@ -159,7 +175,9 @@ describe('WebhookController', () => {
       const prismaWebhookEvent = {
         create: jest.fn().mockImplementation(async () => {
           callOrder.push('webhookEvent.create');
+          return { id: 'evt-uuid-mock' }; // le contrôleur utilise evt.id pour processedAt
         }),
+        update: jest.fn().mockResolvedValue({}), // update processedAt (fire-and-forget)
       };
       const confirmPayment = jest.fn().mockImplementation(async () => {
         callOrder.push('confirmPayment');

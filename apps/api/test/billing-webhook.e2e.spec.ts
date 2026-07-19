@@ -14,6 +14,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
+import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaModule } from '../src/common/prisma.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
@@ -185,7 +186,7 @@ describe('BillingModule webhook (e2e)', () => {
         data: {
           organizationId: orgId,
           subscriptionId: subId,
-          amount: 5000,
+          amount: new Decimal('5000'),
           currency: 'XAF',
           status: 'PENDING',
           dueAt: new Date(Date.now() + 86_400_000),

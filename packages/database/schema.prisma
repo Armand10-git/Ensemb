@@ -106,13 +106,18 @@ model Invoice {
 /// Événement webhook persisté avant tout traitement (idempotence §17 point V).
 /// La contrainte unique (provider, providerEventId) garantit qu'un rejeu est ignoré.
 model WebhookEvent {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid()) @db.Uuid
   provider        String
   providerEventId String
   payload         Json
-  processedAt     DateTime @default(now())
-  invoiceId       String?  @db.Uuid
-  invoice         Invoice? @relation(fields: [invoiceId], references: [id])
+  /// Horodatage de réception du webhook (avant traitement)
+  receivedAt      DateTime  @default(now())
+  /// Horodatage de fin de traitement métier ; null si le traitement a échoué ou est ignoré
+  processedAt     DateTime?
+  /// Tenant concerné — scopé quand l'invoiceId est résolvable
+  organizationId  String?   @db.Uuid
+  invoiceId       String?   @db.Uuid
+  invoice         Invoice?  @relation(fields: [invoiceId], references: [id])
 
   @@unique([provider, providerEventId])
   @@map("webhook_events")
@@ -151,8 +156,28 @@ model Organization {
   roles        Role[]
   subscription Subscription?
   invoices     Invoice[]
+  smtpServer   SmtpServer?
 
   @@map("organizations")
+}
+
+/// Configuration SMTP par organisation — mot de passe chiffré AES-256-GCM (§17 point S).
+/// Ne jamais exposer passwordCipher dans une réponse HTTP.
+model SmtpServer {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @unique @db.Uuid
+  host           String
+  port           Int          @default(587)
+  username       String
+  /// Chiffré en AES-256-GCM — format stocké : "iv:authTag:ciphertext" (hex)
+  passwordCipher String
+  fromEmail      String
+  fromName       String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("smtp_servers")
 }
 
 /// Compte staff plateforme — auth séparée de celle des utilisateurs tenant.
