@@ -1,16 +1,9 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import type { RegisterOrganizationDto } from './dto/register-organization.dto';
 import { RESERVED_SUBDOMAINS } from './dto/register-organization.dto';
-
-/**
- * Durée d'essai standard en jours.
- * DETTE T06 : remplacer par Plan.trialDurationDays et vérifier
- * PlatformSetting.launchPromoEndsAt pour la fenêtre de lancement (§17 point R).
- */
-const DEFAULT_TRIAL_DAYS = 30;
 
 /** Coût bcrypt pour le hash du mot de passe administrateur (identique à AuthService). */
 const BCRYPT_ROUNDS = 12;
@@ -22,21 +15,33 @@ export interface RegistrationResult {
 }
 
 /**
- * Calcule la date de fin d'essai à partir d'un instant donné.
+ * Calcule la date de fin d'essai selon la politique fenêtre de lancement (§17 point R).
+ *
+ * - Pendant la fenêtre : trialEndsAt = launchPromoEndsAt (pas de plafond CA)
+ * - Après la fenêtre ou si launchPromoEndsAt est null : trialEndsAt = now + trialDurationDays
+ *
  * Fonction pure exportée pour être testée indépendamment du service.
- * DETTE T06 : ajouter la branche fenêtre de lancement (launchPromoEndsAt).
  */
-export function computeTrialEndsAt(now: Date, trialDays = DEFAULT_TRIAL_DAYS): Date {
-  return new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
+export function computeTrialPeriod(
+  now: Date,
+  launchPromoEndsAt: Date | null,
+  trialDurationDays: number,
+): Date {
+  if (launchPromoEndsAt !== null && now < launchPromoEndsAt) {
+    return new Date(launchPromoEndsAt.getTime());
+  }
+  return new Date(now.getTime() + trialDurationDays * 24 * 60 * 60 * 1000);
 }
 
 /**
  * Gère l'inscription d'une nouvelle organisation (tenant).
  * Toutes les créations se font dans une transaction atomique :
- * Organization + User admin + Role "Administrateur" + assignation.
+ * Organization + User admin + Role "Administrateur" + assignation + Subscription TRIALING.
  */
 @Injectable()
 export class RegistrationService {
+  private readonly logger = new Logger(RegistrationService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -61,14 +66,15 @@ export class RegistrationService {
    * Crée une nouvelle organisation avec son premier administrateur.
    *
    * Transaction atomique (§18.0 étape 3) :
-   * 1. Organization (status TRIALING, trialEndsAt calculé)
-   * 2. Role "Administrateur" avec toutes les permissions du catalogue global
-   * 3. User admin (bcrypt cost 12)
-   * 4. Assignation du rôle à l'utilisateur
+   * 1. Lecture de PlatformSetting.launchPromoEndsAt et du plan starter
+   * 2. Organization (status TRIALING, trialEndsAt calculé selon §17 point R)
+   * 3. Role "Administrateur" avec toutes les permissions du catalogue global
+   * 4. User admin (bcrypt cost 12)
+   * 5. Assignation du rôle à l'utilisateur
+   * 6. Subscription TRIALING liée au plan starter
    *
    * Si n'importe quelle étape échoue, tout est rollbacké — aucune création partielle.
-   * Le catch P2002 (violation de contrainte unique) protège contre la race condition
-   * entre la vérification de disponibilité hors-transaction et la création.
+   * Le catch P2002 protège contre la race condition sous-domaine.
    */
   async register(dto: RegisterOrganizationDto): Promise<RegistrationResult> {
     const { available } = await this.checkSubdomainAvailability(dto.subdomain);
@@ -77,11 +83,36 @@ export class RegistrationService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.adminPassword, BCRYPT_ROUNDS);
-    const trialEndsAt = computeTrialEndsAt(new Date());
+    const now = new Date();
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const allPermissions = await tx.permission.findMany({ select: { id: true } });
+        // Lecture de la fenêtre de lancement et du plan starter dans la transaction
+        const [launchPromoSetting, starterPlan, allPermissions] = await Promise.all([
+          tx.platformSetting.findUnique({ where: { key: 'launchPromoEndsAt' }, select: { value: true } }),
+          tx.plan.findUnique({ where: { name: 'starter' }, select: { id: true, trialDurationDays: true } }),
+          tx.permission.findMany({ select: { id: true } }),
+        ]);
+
+        if (!starterPlan) {
+          this.logger.error('Plan starter introuvable en base — le seed doit être relancé.');
+          throw new InternalServerErrorException('Erreur interne lors de l\'inscription. Veuillez réessayer.');
+        }
+
+        // Désérialisation de la valeur JSON stockée dans PlatformSetting
+        let launchPromoEndsAt: Date | null = null;
+        if (launchPromoSetting) {
+          const parsed: unknown = JSON.parse(launchPromoSetting.value);
+          if (typeof parsed === 'string') {
+            const d = new Date(parsed);
+            // Rejeter les valeurs non-parsables (Invalid Date)
+            if (!isNaN(d.getTime())) {
+              launchPromoEndsAt = d;
+            }
+          }
+        }
+
+        const trialEndsAt = computeTrialPeriod(now, launchPromoEndsAt, starterPlan.trialDurationDays);
 
         const organization = await tx.organization.create({
           data: {
@@ -112,7 +143,6 @@ export class RegistrationService {
             firstname: dto.adminFirstname,
             lastname: dto.adminLastname,
             email: dto.adminEmail,
-            // username = email à la création ; modifiable par l'admin en T05+
             username: dto.adminEmail,
             password: hashedPassword,
             isActive: true,
@@ -124,6 +154,16 @@ export class RegistrationService {
           data: { userId: adminUser.id, roleId: adminRole.id },
         });
 
+        // Création de la Subscription TRIALING dans la même transaction atomique
+        await tx.subscription.create({
+          data: {
+            organizationId: organization.id,
+            planId: starterPlan.id,
+            status: 'TRIALING',
+            currentPeriodEnd: trialEndsAt,
+          },
+        });
+
         return {
           organizationId: organization.id,
           subdomain: organization.subdomain,
@@ -132,8 +172,6 @@ export class RegistrationService {
       });
     } catch (e) {
       // Race condition : deux inscriptions simultanées avec le même sous-domaine.
-      // La contrainte unique `organizations.subdomain` renvoie P2002 — on la traduit
-      // en ConflictException avec le même message neutre (anti-énumération).
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException('Ce sous-domaine n\'est pas disponible.');
       }

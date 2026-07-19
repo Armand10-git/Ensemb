@@ -1,11 +1,15 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, InternalServerErrorException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { RegistrationService, computeTrialEndsAt } from '../registration.service';
+import { RegistrationService, computeTrialPeriod } from '../registration.service';
 import { RESERVED_SUBDOMAINS } from '../dto/register-organization.dto';
 
-const ORG_ID = 'aaaaaaaa-0000-4000-a000-000000000001';
-const USER_ID = 'aaaaaaaa-0000-4000-a000-000000000002';
-const ROLE_ID = 'aaaaaaaa-0000-4000-a000-000000000003';
+const ORG_ID   = 'aaaaaaaa-0000-4000-a000-000000000001';
+const USER_ID  = 'aaaaaaaa-0000-4000-a000-000000000002';
+const ROLE_ID  = 'aaaaaaaa-0000-4000-a000-000000000003';
+const PLAN_ID  = 'aaaaaaaa-0000-4000-a000-000000000004';
+const SUB_ID   = 'aaaaaaaa-0000-4000-a000-000000000005';
+
+const LAUNCH_PROMO_ENDS_AT = new Date('2026-09-30T23:59:59Z');
 
 const VALID_DTO = {
   subdomain: 'boutique-durand',
@@ -16,12 +20,20 @@ const VALID_DTO = {
   adminPassword: 'MotDePasse123',
 };
 
-const makeTx = () => ({
-  organization: {
-    create: jest.fn().mockResolvedValue({ id: ORG_ID, subdomain: VALID_DTO.subdomain }),
+const makeTx = (overrides: Record<string, unknown> = {}) => ({
+  platformSetting: {
+    findUnique: jest.fn().mockResolvedValue({ value: '"2026-09-30T23:59:59Z"' }),
+    ...((overrides['platformSetting'] as Record<string, unknown>) ?? {}),
+  },
+  plan: {
+    findUnique: jest.fn().mockResolvedValue({ id: PLAN_ID, trialDurationDays: 30 }),
+    ...((overrides['plan'] as Record<string, unknown>) ?? {}),
   },
   permission: {
     findMany: jest.fn().mockResolvedValue([{ id: 'perm-1' }, { id: 'perm-2' }]),
+  },
+  organization: {
+    create: jest.fn().mockResolvedValue({ id: ORG_ID, subdomain: VALID_DTO.subdomain }),
   },
   role: {
     create: jest.fn().mockResolvedValue({ id: ROLE_ID }),
@@ -32,10 +44,13 @@ const makeTx = () => ({
   roleOnUser: {
     create: jest.fn().mockResolvedValue({}),
   },
+  subscription: {
+    create: jest.fn().mockResolvedValue({ id: SUB_ID }),
+  },
 });
 
-const makePrisma = (overrides: Record<string, unknown> = {}) => {
-  const tx = makeTx();
+const makePrisma = (overrides: Record<string, unknown> = {}, txOverrides: Record<string, unknown> = {}) => {
+  const tx = makeTx(txOverrides);
   return {
     organization: {
       findUnique: jest.fn().mockResolvedValue(null),
@@ -47,23 +62,31 @@ const makePrisma = (overrides: Record<string, unknown> = {}) => {
   };
 };
 
-// ─── computeTrialEndsAt ────────────────────────────────────────────────────────
+// ─── computeTrialPeriod ────────────────────────────────────────────────────────
 
-describe('computeTrialEndsAt', () => {
-  it('retourne now + 30 jours par défaut', () => {
-    const now = new Date('2026-07-19T00:00:00Z');
-    const result = computeTrialEndsAt(now);
+describe('computeTrialPeriod', () => {
+  const now = new Date('2026-07-19T00:00:00Z');
+
+  it('pendant la fenêtre de lancement : retourne launchPromoEndsAt', () => {
+    const launchPromoEndsAt = new Date('2026-09-30T23:59:59Z');
+    const result = computeTrialPeriod(now, launchPromoEndsAt, 30);
+    expect(result).toEqual(launchPromoEndsAt);
+  });
+
+  it('après la fenêtre de lancement : retourne now + trialDurationDays', () => {
+    const launchPromoEndsAt = new Date('2026-06-30T23:59:59Z'); // dans le passé
+    const result = computeTrialPeriod(now, launchPromoEndsAt, 30);
     expect(result).toEqual(new Date('2026-08-18T00:00:00Z'));
   });
 
-  it('respecte le paramètre trialDays', () => {
-    const now = new Date('2026-07-19T00:00:00Z');
-    expect(computeTrialEndsAt(now, 14)).toEqual(new Date('2026-08-02T00:00:00Z'));
+  it('launchPromoEndsAt null : retourne now + trialDurationDays', () => {
+    const result = computeTrialPeriod(now, null, 30);
+    expect(result).toEqual(new Date('2026-08-18T00:00:00Z'));
   });
 
-  it('retourne une date strictement dans le futur', () => {
-    const now = new Date();
-    expect(computeTrialEndsAt(now).getTime()).toBeGreaterThan(now.getTime());
+  it('respecte un trialDurationDays personnalisé', () => {
+    const result = computeTrialPeriod(now, null, 14);
+    expect(result).toEqual(new Date('2026-08-02T00:00:00Z'));
   });
 });
 
@@ -121,22 +144,78 @@ describe('RegistrationService', () => {
       });
     });
 
-    it('crée l\'organisation avec trialEndsAt ≈ now + 30j', async () => {
-      const before = new Date();
+    it('pendant la fenêtre de lancement : trialEndsAt = launchPromoEndsAt', async () => {
       const prisma = makePrisma();
       const service = new RegistrationService(prisma as never);
 
       await service.register(VALID_DTO);
 
       const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
-      const callArg = (_tx.organization.create as jest.Mock).mock.calls[0][0] as {
+      const orgCreate = (_tx.organization.create as jest.Mock).mock.calls[0][0] as {
         data: { trialEndsAt: Date };
       };
-      const trialEndsAt = callArg.data.trialEndsAt;
+      expect(orgCreate.data.trialEndsAt).toEqual(LAUNCH_PROMO_ENDS_AT);
+    });
+
+    it('après la fenêtre : trialEndsAt ≈ now + trialDurationDays', async () => {
+      const pastDate = new Date('2026-06-30T23:59:59Z');
+      const prisma = makePrisma({}, {
+        platformSetting: {
+          findUnique: jest.fn().mockResolvedValue({ value: `"${pastDate.toISOString()}"` }),
+        },
+      });
+      const service = new RegistrationService(prisma as never);
+
+      const before = Date.now();
+      await service.register(VALID_DTO);
+      const after = Date.now();
+
+      const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
+      const orgCreate = (_tx.organization.create as jest.Mock).mock.calls[0][0] as {
+        data: { trialEndsAt: Date };
+      };
+      const trialEndsAt = orgCreate.data.trialEndsAt.getTime();
       const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-      const diff = trialEndsAt.getTime() - before.getTime();
-      expect(diff).toBeGreaterThanOrEqual(thirtyDaysMs - 1000);
-      expect(diff).toBeLessThanOrEqual(thirtyDaysMs + 5000);
+      expect(trialEndsAt).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
+      expect(trialEndsAt).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
+    });
+
+    it('launchPromoEndsAt absent (null) : trialEndsAt ≈ now + 30j', async () => {
+      const prisma = makePrisma({}, {
+        platformSetting: {
+          findUnique: jest.fn().mockResolvedValue(null),
+        },
+      });
+      const service = new RegistrationService(prisma as never);
+
+      const before = Date.now();
+      await service.register(VALID_DTO);
+      const after = Date.now();
+
+      const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
+      const orgCreate = (_tx.organization.create as jest.Mock).mock.calls[0][0] as {
+        data: { trialEndsAt: Date };
+      };
+      const trialEndsAt = orgCreate.data.trialEndsAt.getTime();
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+      expect(trialEndsAt).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
+      expect(trialEndsAt).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
+    });
+
+    it('crée une Subscription TRIALING avec currentPeriodEnd = trialEndsAt', async () => {
+      const prisma = makePrisma();
+      const service = new RegistrationService(prisma as never);
+
+      await service.register(VALID_DTO);
+
+      const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
+      const subCreate = (_tx.subscription.create as jest.Mock).mock.calls[0][0] as {
+        data: { organizationId: string; planId: string; status: string; currentPeriodEnd: Date };
+      };
+      expect(subCreate.data.organizationId).toBe(ORG_ID);
+      expect(subCreate.data.planId).toBe(PLAN_ID);
+      expect(subCreate.data.status).toBe('TRIALING');
+      expect(subCreate.data.currentPeriodEnd).toEqual(LAUNCH_PROMO_ENDS_AT);
     });
 
     it('assigne toutes les permissions du catalogue au rôle administrateur', async () => {
@@ -153,6 +232,15 @@ describe('RegistrationService', () => {
         { permissionId: 'perm-1' },
         { permissionId: 'perm-2' },
       ]);
+    });
+
+    it('lance InternalServerErrorException si le plan starter est absent', async () => {
+      const prisma = makePrisma({}, {
+        plan: { findUnique: jest.fn().mockResolvedValue(null) },
+      });
+      const service = new RegistrationService(prisma as never);
+
+      await expect(service.register(VALID_DTO)).rejects.toBeInstanceOf(InternalServerErrorException);
     });
 
     it('lance ConflictException si le sous-domaine est déjà pris (check applicatif)', async () => {

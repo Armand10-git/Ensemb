@@ -38,12 +38,13 @@ describe('RegistrationController (e2e)', () => {
   }, 30_000);
 
   afterAll(async () => {
-    // Nettoyage : respecter les FK (User → Org, Role → Org)
+    // Nettoyage : respecter les FK (Subscription → Org, User → Org, Role → Org)
     const orgs = await prisma.organization.findMany({
       where: { subdomain: { startsWith: 't04-test-' } },
       select: { id: true },
     });
     const ids = orgs.map((o) => o.id);
+    await prisma.subscription.deleteMany({ where: { organizationId: { in: ids } } });
     await prisma.roleOnUser.deleteMany({ where: { user: { organizationId: { in: ids } } } });
     await prisma.user.deleteMany({ where: { organizationId: { in: ids } } });
     await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: ids } } } });
@@ -112,6 +113,17 @@ describe('RegistrationController (e2e)', () => {
       // Le rôle administrateur reçoit exactement toutes les permissions du catalogue global
       const catalogueCount = await prisma.permission.count();
       expect(adminRole!.permissions.length).toBe(catalogueCount);
+
+      // Vérifier que la Subscription TRIALING a été créée (T06)
+      const subscription = await prisma.subscription.findUnique({
+        where: { organizationId: org!.id },
+        include: { plan: true },
+      });
+      expect(subscription).not.toBeNull();
+      expect(subscription!.status).toBe('TRIALING');
+      expect(subscription!.plan.name).toBe('starter');
+      // trialEndsAt doit correspondre à currentPeriodEnd de la subscription
+      expect(subscription!.currentPeriodEnd.getTime()).toBe(org!.trialEndsAt!.getTime());
     }, 15_000);
 
     it('GET check-subdomain retourne { available: false } apres inscription', async () => {

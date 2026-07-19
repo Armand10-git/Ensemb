@@ -16,6 +16,70 @@ enum OrganizationStatus {
   CANCELED
 }
 
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  SUSPENDED
+}
+
+/// Plan tarifaire de la plateforme. Valeurs modifiables par le staff plateforme sans déploiement.
+model Plan {
+  id                    String         @id @default(uuid()) @db.Uuid
+  /// Clé technique : "starter", "pro", "enterprise"
+  name                  String         @unique
+  /// Libellé affiché : "Starter", "Pro", "Enterprise"
+  label                 String
+  /// Prix mensuel en XAF (Decimal obligatoire — règle §17 point A)
+  priceMonthly          Decimal        @db.Decimal(10, 2)
+  /// Prix annuel en XAF
+  priceAnnual           Decimal        @db.Decimal(10, 2)
+  /// Durée d'essai standard après la fenêtre de lancement
+  trialDurationDays     Int            @default(30)
+  /// Plafond CA d'essai en XAF ; null = illimité (fenêtre de lancement ou enterprise)
+  trialRevenueCapAmount Decimal?       @db.Decimal(12, 2)
+  /// Nombre maximum d'utilisateurs ; null = illimité
+  maxUsers              Int?
+  /// Nombre maximum d'entrepôts ; null = illimité
+  maxWarehouses         Int?
+  /// Nombre maximum de produits ; null = illimité
+  maxProducts           Int?
+  isActive              Boolean        @default(true)
+  subscriptions         Subscription[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@map("plans")
+}
+
+/// Abonnement actif d'une organisation. Une seule subscription active par org (contrainte unique).
+model Subscription {
+  id                String             @id @default(uuid()) @db.Uuid
+  organizationId    String             @unique @db.Uuid
+  planId            String             @db.Uuid
+  status            SubscriptionStatus @default(TRIALING)
+  currentPeriodEnd  DateTime
+  cancelAtPeriodEnd Boolean            @default(false)
+  organization      Organization       @relation(fields: [organizationId], references: [id])
+  plan              Plan               @relation(fields: [planId], references: [id])
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([planId])
+  @@map("subscriptions")
+}
+
+/// Paramètres plateforme modifiables sans redéploiement (clé/valeur JSON sérialisé).
+/// Ex. : launchPromoEndsAt = "2026-09-30T23:59:59Z"
+model PlatformSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
 /// Organisation cliente (tenant). Chaque modèle métier est scopé par organizationId.
 model Organization {
   id           String             @id @default(uuid()) @db.Uuid
@@ -35,8 +99,9 @@ model Organization {
   createdAt         DateTime           @default(now())
   deletedAt         DateTime?
 
-  users User[]
-  roles Role[]
+  users        User[]
+  roles        Role[]
+  subscription Subscription?
 
   @@map("organizations")
 }
