@@ -258,6 +258,73 @@ async function main(): Promise<void> {
   });
   console.log(`✔  Rôle Administrateur assigné à l'utilisateur admin`);
 
+  // 5. Plans tarifaires (idempotent sur le name)
+  const PLANS = [
+    {
+      name: 'starter',
+      label: 'Starter',
+      priceMonthly: 5000,
+      priceAnnual: 50000,
+      trialDurationDays: 30,
+      trialRevenueCapAmount: 500000,
+      maxUsers: 5,
+      maxWarehouses: 1,
+      maxProducts: 500,
+      isActive: true,
+    },
+    {
+      name: 'pro',
+      label: 'Pro',
+      priceMonthly: 15000,
+      priceAnnual: 150000,
+      trialDurationDays: 30,
+      trialRevenueCapAmount: 2000000,
+      maxUsers: 20,
+      maxWarehouses: 5,
+      maxProducts: null,
+      isActive: true,
+    },
+    {
+      name: 'enterprise',
+      label: 'Enterprise',
+      priceMonthly: 40000,
+      priceAnnual: 400000,
+      trialDurationDays: 30,
+      trialRevenueCapAmount: null,
+      maxUsers: null,
+      maxWarehouses: null,
+      maxProducts: null,
+      isActive: true,
+    },
+  ];
+
+  for (const plan of PLANS) {
+    await prisma.plan.upsert({
+      where: { name: plan.name },
+      update: {
+        label: plan.label,
+        priceMonthly: plan.priceMonthly,
+        priceAnnual: plan.priceAnnual,
+        trialDurationDays: plan.trialDurationDays,
+        trialRevenueCapAmount: plan.trialRevenueCapAmount,
+        maxUsers: plan.maxUsers,
+        maxWarehouses: plan.maxWarehouses,
+        maxProducts: plan.maxProducts,
+        isActive: plan.isActive,
+      },
+      create: plan,
+    });
+  }
+  console.log(`✔  ${PLANS.length} plans insérés/mis à jour`);
+
+  // 6. PlatformSetting : fenêtre de lancement (modifiable sans redéploiement)
+  await prisma.platformSetting.upsert({
+    where: { key: 'launchPromoEndsAt' },
+    update: {},
+    create: { key: 'launchPromoEndsAt', value: '"2026-09-30T23:59:59Z"' },
+  });
+  console.log('✔  PlatformSetting launchPromoEndsAt insérée/mise à jour');
+
   console.log('🎉 Seed terminé avec succès.');
 }
 

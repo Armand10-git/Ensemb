@@ -11,6 +11,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { RegistrationModule } from './modules/registration/registration.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
     AuditModule,
     RegistrationModule,
     OrganizationsModule,
+    BillingModule,
   ],
 })
 export class AppModule {}
