@@ -1,9 +1,7 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
-import { PrismaService } from '../common/prisma.service';
-import { RedisService } from '../common/redis.service';
-
-const SUBDOMAIN_CACHE_TTL_SECONDS = 3600;
-const CACHE_KEY_PREFIX = 'org:bySubdomain:';
+import { BadRequestException, Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { TenancyService } from './tenancy.service';
+import { SUBDOMAIN_REGEX } from './tenancy.constants';
 
 /**
  * Endpoint public permettant au frontend mobile de résoudre un tenant
@@ -11,33 +9,28 @@ const CACHE_KEY_PREFIX = 'org:bySubdomain:';
  */
 @Controller('public/organizations')
 export class PublicOrganizationsController {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
-  ) {}
+  constructor(private readonly tenancyService: TenancyService) {}
 
   /**
    * Résout un sous-domaine en organizationId.
    * Répond 404 neutre si le sous-domaine est inconnu.
+   * Rate-limitée à 10 req/min pour bloquer l'énumération de sous-domaines.
    */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('by-subdomain/:subdomain')
   async bySubdomain(@Param('subdomain') subdomain: string): Promise<{ organizationId: string }> {
-    const cacheKey = `${CACHE_KEY_PREFIX}${subdomain}`;
+    // Validation format RFC 1123 — rejette tout vecteur d'injection ou d'énumération anormal
+    if (!SUBDOMAIN_REGEX.test(subdomain)) {
+      throw new BadRequestException('Format de sous-domaine invalide');
+    }
 
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return { organizationId: cached };
+    const organizationId = await this.tenancyService.resolveOrganizationId(subdomain);
 
-    const org = await this.prisma.organization.findUnique({
-      where: { subdomain },
-      select: { id: true },
-    });
-
-    if (!org) {
+    if (!organizationId) {
       // Réponse neutre — ne révèle pas si le sous-domaine existe ou non
       throw new NotFoundException('Organisation introuvable');
     }
 
-    await this.redis.set(cacheKey, org.id, SUBDOMAIN_CACHE_TTL_SECONDS);
-    return { organizationId: org.id };
+    return { organizationId };
   }
 }

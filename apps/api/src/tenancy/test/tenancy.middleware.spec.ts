@@ -1,19 +1,17 @@
 import { TenancyMiddleware } from '../tenancy.middleware';
 import { TenantContextService } from '../tenant-context.service';
+import { TenancyService } from '../tenancy.service';
 
 describe('TenancyMiddleware', () => {
   let middleware: TenancyMiddleware;
-  let prisma: { organization: { findUnique: jest.Mock } };
-  let redis: { get: jest.Mock; set: jest.Mock };
+  let tenancyService: { resolveOrganizationId: jest.Mock };
   let tenantContext: TenantContextService;
 
   beforeEach(() => {
-    prisma = { organization: { findUnique: jest.fn() } };
-    redis = { get: jest.fn(), set: jest.fn() };
+    tenancyService = { resolveOrganizationId: jest.fn() };
     tenantContext = new TenantContextService();
     middleware = new TenancyMiddleware(
-      prisma as never,
-      redis as never,
+      tenancyService as unknown as TenancyService,
       tenantContext,
     );
   });
@@ -23,16 +21,14 @@ describe('TenancyMiddleware', () => {
   }
 
   function makeRes() {
-    const res = {
+    return {
       status: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis(),
     };
-    return res;
   }
 
-  it('retourne 404 quand le sous-domaine est inconnu (ni cache ni base)', async () => {
-    redis.get.mockResolvedValue(null);
-    prisma.organization.findUnique.mockResolvedValue(null);
+  it('retourne 404 quand le sous-domaine est inconnu', async () => {
+    tenancyService.resolveOrganizationId.mockResolvedValue(null);
 
     const res = makeRes();
     const next = jest.fn();
@@ -50,11 +46,23 @@ describe('TenancyMiddleware', () => {
 
     expect(res.status).toHaveBeenCalledWith(404);
     expect(next).not.toHaveBeenCalled();
+    // resolveOrganizationId ne doit pas être appelé — le sous-domaine est rejeté avant
+    expect(tenancyService.resolveOrganizationId).not.toHaveBeenCalled();
   });
 
-  it('appelle next() et alimente le contexte tenant quand le sous-domaine est valide (cache)', async () => {
+  it('retourne 404 sur un sous-domaine au format invalide (vecteur injection)', async () => {
+    const res = makeRes();
+    const next = jest.fn();
+    // Tentatived d'injection via header Host malformé
+    await middleware.use(makeReq('../evil.monapp.com'), res as never, next);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(tenancyService.resolveOrganizationId).not.toHaveBeenCalled();
+  });
+
+  it('appelle next() et alimente le contexte tenant quand le sous-domaine est valide', async () => {
     const orgId = 'org-uuid-abc';
-    redis.get.mockResolvedValue(orgId);
+    tenancyService.resolveOrganizationId.mockResolvedValue(orgId);
 
     const res = makeRes();
     let capturedOrgId: string | undefined;
@@ -67,18 +75,5 @@ describe('TenancyMiddleware', () => {
     expect(next).toHaveBeenCalled();
     expect(capturedOrgId).toBe(orgId);
     expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it('met en cache le résultat Prisma après lookup réussi', async () => {
-    const orgId = 'org-uuid-def';
-    redis.get.mockResolvedValue(null);
-    prisma.organization.findUnique.mockResolvedValue({ id: orgId });
-    redis.set.mockResolvedValue(undefined);
-
-    const next = jest.fn();
-    await middleware.use(makeReq('tenant.monapp.com'), makeRes() as never, next);
-
-    expect(redis.set).toHaveBeenCalledWith('org:bySubdomain:tenant', orgId, 3600);
-    expect(next).toHaveBeenCalled();
   });
 });

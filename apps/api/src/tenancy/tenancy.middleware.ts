@@ -1,11 +1,8 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import { PrismaService } from '../common/prisma.service';
-import { RedisService } from '../common/redis.service';
 import { TenantContextService } from './tenant-context.service';
-
-const SUBDOMAIN_CACHE_TTL_SECONDS = 3600;
-const CACHE_KEY_PREFIX = 'org:bySubdomain:';
+import { TenancyService } from './tenancy.service';
+import { SUBDOMAIN_REGEX } from './tenancy.constants';
 
 /**
  * Extrait le sous-domaine du header Host, résout l'organisation via Redis (cache)
@@ -17,8 +14,7 @@ const CACHE_KEY_PREFIX = 'org:bySubdomain:';
 @Injectable()
 export class TenancyMiddleware implements NestMiddleware {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly tenancyService: TenancyService,
     private readonly tenantContext: TenantContextService,
   ) {}
 
@@ -30,7 +26,7 @@ export class TenancyMiddleware implements NestMiddleware {
       return;
     }
 
-    const organizationId = await this.resolveOrganizationId(subdomain);
+    const organizationId = await this.tenancyService.resolveOrganizationId(subdomain);
 
     if (!organizationId) {
       res.status(404).json({ message: 'Organisation introuvable' });
@@ -49,26 +45,9 @@ export class TenancyMiddleware implements NestMiddleware {
     if (!host.includes('.')) return null;
 
     const parts = host.split('.');
-    // Sous-domaine = premier segment, ex. "boutique-durand" dans "boutique-durand.monapp.com"
-    // On rejette les wildcards ou segments vides
-    const sub = parts[0];
-    return sub && sub.length > 0 ? sub : null;
-  }
+    const sub = parts[0] ?? '';
 
-  private async resolveOrganizationId(subdomain: string): Promise<string | null> {
-    const cacheKey = `${CACHE_KEY_PREFIX}${subdomain}`;
-
-    const cached = await this.redis.get(cacheKey);
-    if (cached) return cached;
-
-    const org = await this.prisma.organization.findUnique({
-      where: { subdomain },
-      select: { id: true },
-    });
-
-    if (!org) return null;
-
-    await this.redis.set(cacheKey, org.id, SUBDOMAIN_CACHE_TTL_SECONDS);
-    return org.id;
+    // Valide le format RFC 1123 pour éviter tout vecteur d'injection par le header Host
+    return SUBDOMAIN_REGEX.test(sub) ? sub : null;
   }
 }
