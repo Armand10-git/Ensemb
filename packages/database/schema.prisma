@@ -152,11 +152,12 @@ model Organization {
   createdAt         DateTime           @default(now())
   deletedAt         DateTime?
 
-  users        User[]
-  roles        Role[]
-  subscription Subscription?
-  invoices     Invoice[]
-  smtpServer   SmtpServer?
+  users         User[]
+  roles         Role[]
+  subscription  Subscription?
+  invoices      Invoice[]
+  smtpServer    SmtpServer?
+  backupExports BackupExport[]
 
   @@map("organizations")
 }
@@ -300,4 +301,41 @@ model AuditLog {
   @@index([organizationId, createdAt])
   @@index([entity, entityId])
   @@map("audit_logs")
+}
+
+// ─── Sauvegarde / exports (T09) ──────────────────────────────────────────────
+
+enum ExportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ExportFormat {
+  CSV
+  JSON
+}
+
+/// Export de données par organisation (§17 point N).
+/// Un export ne contient jamais de données d'un autre tenant.
+/// Stockage local storage/exports/<organizationId>/<exportId>.<ext> — TODO T09-debt: migrer vers S3-compatible (S13, §17 point Y).
+model BackupExport {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  status         ExportStatus @default(PENDING)
+  format         ExportFormat @default(CSV)
+  /// Nom du fichier généré — null tant que le job n'a pas produit le fichier.
+  filename       String?
+  /// Taille en octets du fichier généré — null avant complétion.
+  sizeBytes      Int?
+  /// Message d'erreur interne — ne jamais exposer dans une réponse HTTP.
+  errorMessage   String?
+  requestedAt    DateTime     @default(now())
+  completedAt    DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, requestedAt(sort: Desc)])
+  @@map("backup_exports")
 }
