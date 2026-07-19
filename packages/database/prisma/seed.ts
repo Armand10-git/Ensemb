@@ -325,6 +325,20 @@ async function main(): Promise<void> {
   });
   console.log('✔  PlatformSetting launchPromoEndsAt insérée/mise à jour');
 
+  // 7. PlatformAdmin de démo (TOTP non encore configuré)
+  const adminPassword = await bcrypt.hash('Admin@Ensemb2026!', 12);
+  await prisma.platformAdmin.upsert({
+    where: { email: 'admin@ensemb.platform' },
+    update: {},
+    create: {
+      email: 'admin@ensemb.platform',
+      password: adminPassword,
+      totpEnabled: false,
+      isActive: true,
+    },
+  });
+  console.log('✔  PlatformAdmin admin@ensemb.platform inséré/mis à jour');
+
   console.log('🎉 Seed terminé avec succès.');
 }
 

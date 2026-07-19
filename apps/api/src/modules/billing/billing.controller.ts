@@ -8,18 +8,13 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Auditable } from '../audit/auditable.decorator';
 import { BillingService } from './billing.service';
 import { SubscribeSchema } from './dto/subscribe.dto';
-import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
-
-interface AuthRequest extends Request {
-  user: AuthenticatedUser;
-}
+import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 /**
  * Endpoints de facturation — accès réservé aux utilisateurs authentifiés avec la permission billing.manage.
@@ -40,7 +35,7 @@ export class BillingController {
   @Auditable({ action: 'BILLING_SUBSCRIBE', entity: 'Subscription' })
   async subscribe(
     @Body() body: unknown,
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
   ): Promise<{ invoiceId: string; paymentUrl: string }> {
     const result = SubscribeSchema.safeParse(body);
     if (!result.success) {

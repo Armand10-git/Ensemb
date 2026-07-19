@@ -42,6 +42,7 @@ const makeController = (opts: {
   signatureValid?: boolean;
   confirmPayment?: jest.Mock;
   dupOnSecondCall?: boolean;
+  orgExists?: boolean;
 } = {}) => {
   const aggregator = { verifyWebhookSignature: jest.fn().mockReturnValue(opts.signatureValid ?? true) };
   const confirmPayment = opts.confirmPayment ?? jest.fn().mockResolvedValue(undefined);
@@ -50,6 +51,11 @@ const makeController = (opts: {
   const prisma = {
     webhookEvent,
     invoice: { findUnique: jest.fn().mockResolvedValue({ organizationId: ORG_ID }) },
+    organization: {
+      findUnique: jest.fn().mockResolvedValue(
+        (opts.orgExists ?? true) ? { id: ORG_ID } : null,
+      ),
+    },
   };
   const ctrl = new WebhookController(aggregator as never, billing as never, prisma as never);
   return { ctrl, aggregator, billing, prisma, webhookEvent, confirmPayment };
@@ -132,6 +138,18 @@ describe('WebhookController — idempotence', () => {
       );
 
       expect(result).toEqual({ received: true });
+    });
+
+    it('retourne 200 et n\'insère aucun WebhookEvent si l\'org est inconnue', async () => {
+      const { ctrl, webhookEvent } = makeController({ orgExists: false });
+
+      const result = await ctrl.handlePosPaymentWebhook(
+        'ffffffff-0000-4000-f000-000000000001',
+        makeReq(makeRaw(POS_PAYLOAD)) as never,
+      );
+
+      expect(result).toEqual({ received: true });
+      expect(webhookEvent.create).not.toHaveBeenCalled();
     });
   });
 });

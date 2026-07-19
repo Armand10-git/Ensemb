@@ -14,7 +14,6 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
@@ -23,12 +22,8 @@ import { CreateRoleSchema } from './dto/create-role.dto';
 import { UpdateRoleSchema } from './dto/update-role.dto';
 import { ManagePermissionsSchema } from './dto/manage-permissions.dto';
 import { AssignRoleSchema } from './dto/assign-role.dto';
-import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
+import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 import { Auditable } from '../audit/auditable.decorator';
-
-interface AuthRequest extends Request {
-  user: AuthenticatedUser;
-}
 
 function parsePagination(page: unknown, limit: unknown) {
   const p = Math.max(1, parseInt(String(page ?? '1'), 10) || 1);
@@ -45,7 +40,7 @@ export class RolesController {
   @RequirePermission('permissions.view')
   @Get()
   findAll(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -55,7 +50,7 @@ export class RolesController {
   /** GET /api/v1/roles/:id — détail d'un rôle avec ses permissions. */
   @RequirePermission('permissions.view')
   @Get(':id')
-  findOne(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
+  findOne(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.rolesService.findOne(req.user.organizationId, id);
   }
 
@@ -64,7 +59,7 @@ export class RolesController {
   @Auditable({ action: 'roles.create', entity: 'Role' })
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@Req() req: AuthRequest, @Body() body: unknown) {
+  create(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
     const result = CreateRoleSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
@@ -77,7 +72,7 @@ export class RolesController {
   @Auditable({ action: 'roles.update', entity: 'Role' })
   @Patch(':id')
   update(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
@@ -93,7 +88,7 @@ export class RolesController {
   @Auditable({ action: 'roles.delete', entity: 'Role' })
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
+  async remove(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     await this.rolesService.remove(req.user.organizationId, id);
   }
 
@@ -102,7 +97,7 @@ export class RolesController {
   @Auditable({ action: 'permissions.assign', entity: 'Role' })
   @Post(':id/permissions')
   addPermissions(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
@@ -119,7 +114,7 @@ export class RolesController {
   @Delete(':id/permissions')
   @HttpCode(HttpStatus.OK)
   removePermissions(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
@@ -140,7 +135,7 @@ export class RolesController {
   @Post(':id/users')
   @HttpCode(HttpStatus.NO_CONTENT)
   async assignRole(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
@@ -157,7 +152,7 @@ export class RolesController {
   @Delete(':id/users/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async revokeRole(
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Param('userId', ParseUUIDPipe) userId: string,
   ) {

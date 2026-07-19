@@ -10,12 +10,11 @@ import { from, Observable, of } from 'rxjs';
 import { catchError, switchMap, tap } from 'rxjs/operators';
 import { AUDITABLE_KEY, type AuditableMetadata } from './auditable.decorator';
 import { AuditService } from './audit.service';
-import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
+import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 import type { Prisma } from '@prisma/client';
 
-interface AuthRequest extends Request {
-  user?: AuthenticatedUser;
-}
+/** L'interceptor s'applique aussi sur des routes publiques sans user. */
+type MaybeAuthRequest = Request & Partial<Pick<AuthenticatedRequest, 'user'>>;
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -47,7 +46,7 @@ export class AuditInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const req = context.switchToHttp().getRequest<AuthRequest>();
+    const req = context.switchToHttp().getRequest<MaybeAuthRequest>();
     const user = req.user;
     const paramId = req.params['id'] as string | undefined;
     const validParamId = paramId && UUID_REGEX.test(paramId) ? paramId : undefined;

@@ -23,26 +23,20 @@ export class SmtpServerService {
    */
   async upsert(organizationId: string, dto: SmtpServerDto): Promise<SmtpServerPublicDto> {
     const passwordCipher = this.encryption.encrypt(dto.password);
+    // Champs partagés entre create et update — spreading d'un objet local typé (pas du body)
+    const fields = {
+      host: dto.host,
+      port: dto.port,
+      username: dto.username,
+      passwordCipher,
+      fromEmail: dto.fromEmail,
+      fromName: dto.fromName,
+    };
 
     const record = await this.prisma.smtpServer.upsert({
       where: { organizationId },
-      create: {
-        organizationId,
-        host: dto.host,
-        port: dto.port,
-        username: dto.username,
-        passwordCipher,
-        fromEmail: dto.fromEmail,
-        fromName: dto.fromName,
-      },
-      update: {
-        host: dto.host,
-        port: dto.port,
-        username: dto.username,
-        passwordCipher,
-        fromEmail: dto.fromEmail,
-        fromName: dto.fromName,
-      },
+      create: { organizationId, ...fields },
+      update: fields,
       select: {
         id: true,
         organizationId: true,
