@@ -10,7 +10,8 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
   // Préfixe global — toutes les routes répondent sous /api/v1 (§17 point AA)
-  app.setGlobalPrefix('api/v1');
+  // /health et /ready sont exclus car appelés sans préfixe par l'orchestrateur
+  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] });
 
   // En-têtes de sécurité HTTP (CSP, HSTS, X-Content-Type-Options, X-Frame-Options…)
   app.use(helmet());

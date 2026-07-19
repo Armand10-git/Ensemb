@@ -24,6 +24,7 @@ import { UpdateRoleSchema } from './dto/update-role.dto';
 import { ManagePermissionsSchema } from './dto/manage-permissions.dto';
 import { AssignRoleSchema } from './dto/assign-role.dto';
 import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
+import { Auditable } from '../audit/auditable.decorator';
 
 interface AuthRequest extends Request {
   user: AuthenticatedUser;
@@ -72,6 +73,7 @@ export class RolesController {
 
   /** PATCH /api/v1/roles/:id — modifie label, description ou statut. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'roles.update', entity: 'Role' })
   @Patch(':id')
   update(
     @Req() req: AuthRequest,
@@ -87,6 +89,7 @@ export class RolesController {
 
   /** DELETE /api/v1/roles/:id — désactive (soft delete) un rôle. */
   @RequirePermission('permissions.delete')
+  @Auditable({ action: 'roles.delete', entity: 'Role' })
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
@@ -95,6 +98,7 @@ export class RolesController {
 
   /** POST /api/v1/roles/:id/permissions — ajoute des permissions au rôle. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'permissions.assign', entity: 'Role' })
   @Post(':id/permissions')
   addPermissions(
     @Req() req: AuthRequest,
@@ -110,6 +114,7 @@ export class RolesController {
 
   /** DELETE /api/v1/roles/:id/permissions — retire des permissions du rôle. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'permissions.revoke', entity: 'Role' })
   @Delete(':id/permissions')
   @HttpCode(HttpStatus.OK)
   removePermissions(
