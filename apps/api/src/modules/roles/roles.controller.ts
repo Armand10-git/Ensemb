@@ -61,6 +61,7 @@ export class RolesController {
 
   /** POST /api/v1/roles — crée un rôle. */
   @RequirePermission('permissions.create')
+  @Auditable({ action: 'roles.create', entity: 'Role' })
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@Req() req: AuthRequest, @Body() body: unknown) {
@@ -135,6 +136,7 @@ export class RolesController {
 
   /** POST /api/v1/roles/:id/users — assigne le rôle à un utilisateur. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'roles.assign_user', entity: 'Role' })
   @Post(':id/users')
   @HttpCode(HttpStatus.NO_CONTENT)
   async assignRole(
@@ -151,6 +153,7 @@ export class RolesController {
 
   /** DELETE /api/v1/roles/:id/users/:userId — révoque le rôle d'un utilisateur. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'roles.revoke_user', entity: 'Role' })
   @Delete(':id/users/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async revokeRole(

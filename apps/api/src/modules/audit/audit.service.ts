@@ -2,9 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import type { Prisma } from '@prisma/client';
 
+export type ActorType = 'USER' | 'PLATFORM_ADMIN' | 'SYSTEM';
+
 export interface CreateAuditLogDto {
   organizationId?: string | null;
-  actorType: string;
+  actorType: ActorType;
   actorId?: string | null;
   action: string;
   entity: string;
@@ -18,6 +20,10 @@ export interface PaginationParams {
   limit: number;
 }
 
+type PrismaModel = {
+  findUnique: (args: { where: { id: string } }) => Promise<Record<string, unknown> | null>;
+};
+
 /**
  * Persiste et expose le journal d'audit des mutations sensibles.
  * La création est non-bloquante : les erreurs sont loggées côté serveur
@@ -30,8 +36,26 @@ export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Crée une entrée AuditLog de manière asynchrone.
-   * Ne lève jamais d'exception — un échec d'audit ne doit pas faire échouer
+   * Lit l'état courant d'une entité avant mutation (pour le champ `before`).
+   * Retourne null si le modèle Prisma n'existe pas ou si la lecture échoue.
+   *
+   * @param entity - Nom du modèle Prisma (ex. "Role").
+   * @param id - UUID de l'entité.
+   */
+  async fetchEntitySnapshot(entity: string, id: string): Promise<Record<string, unknown> | null> {
+    const modelKey = entity.charAt(0).toLowerCase() + entity.slice(1);
+    const model = (this.prisma as unknown as Record<string, PrismaModel | undefined>)[modelKey];
+    if (!model) return null;
+    try {
+      return await model.findUnique({ where: { id } });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Crée une entrée AuditLog.
+   * Ne lève jamais d'exception — un échec d'audit ne doit jamais faire échouer
    * la requête principale.
    */
   async create(dto: CreateAuditLogDto): Promise<void> {
@@ -49,7 +73,7 @@ export class AuditService {
         },
       });
     } catch (err: unknown) {
-      this.logger.error('Échec de persistence AuditLog', err);
+      this.logger.error('Echec de persistence AuditLog', err);
     }
   }
 
