@@ -11,7 +11,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { PlatformAdminAuthService } from './platform-admin-auth.service';
-import { PlatformAdminGuard } from './platform-admin.guard';
+import { PlatformAdminGuard, AuthenticatedPlatformAdmin } from './platform-admin.guard';
 import { TempTokenGuard } from './platform-admin-temp-token.guard';
 import {
   PlatformAdminLoginSchema,
@@ -90,6 +90,7 @@ export class PlatformAdminAuthController {
    */
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async refresh(@Body() body: unknown) {
     const result = PlatformAdminRefreshSchema.safeParse(body);
     if (!result.success) throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
@@ -100,9 +101,13 @@ export class PlatformAdminAuthController {
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(PlatformAdminGuard)
-  async logout(@Body() body: unknown) {
+  async logout(
+    @Body() body: unknown,
+    @Req() req: Request & { platformAdmin?: AuthenticatedPlatformAdmin },
+  ) {
     const result = PlatformAdminRefreshSchema.safeParse(body);
     if (!result.success) throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
-    await this.authService.logout(result.data.refreshToken);
+    const callerAdminId = (req.platformAdmin as AuthenticatedPlatformAdmin).id;
+    await this.authService.logout(result.data.refreshToken, callerAdminId);
   }
 }

@@ -60,7 +60,7 @@ export class PlatformAdminDashboardService {
     const atRiskThreshold = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
     const [
-      activeSubscriptions,
+      mrrRows,
       activeCount,
       trialingCount,
       suspendedCount,
@@ -69,11 +69,13 @@ export class PlatformAdminDashboardService {
       recentExpired,
       atRiskCount,
     ] = await Promise.all([
-      // MRR : somme des prix mensuel des abonnements ACTIVE
-      this.prisma.subscription.findMany({
-        where: { status: 'ACTIVE' },
-        include: { plan: { select: { priceMonthly: true } } },
-      }),
+      // MRR : SUM SQL sur les plans des abonnements ACTIVE — évite de charger toutes les lignes en mémoire
+      this.prisma.$queryRaw<Array<{ mrr: string }>>`
+        SELECT COALESCE(SUM(p.price_monthly), 0)::text AS mrr
+        FROM subscriptions s
+        JOIN plans p ON s.plan_id = p.id
+        WHERE s.status = 'ACTIVE'
+      `,
       this.prisma.subscription.count({ where: { status: 'ACTIVE' } }),
       this.prisma.subscription.count({ where: { status: 'TRIALING' } }),
       this.prisma.organization.count({ where: { status: 'SUSPENDED' } }),
@@ -82,7 +84,7 @@ export class PlatformAdminDashboardService {
       this.prisma.subscription.count({
         where: { status: 'ACTIVE', createdAt: { gte: thirtyDaysAgo } },
       }),
-      // Expirés sur les 30 derniers jours : CANCELED créés sur la période
+      // Expirés sur les 30 derniers jours : CANCELED mis à jour sur la période
       this.prisma.subscription.count({
         where: { status: 'CANCELED', updatedAt: { gte: thirtyDaysAgo } },
       }),
@@ -95,10 +97,8 @@ export class PlatformAdminDashboardService {
       }),
     ]);
 
-    const mrr = activeSubscriptions.reduce<Decimal>(
-      (acc, sub) => acc.add(sub.plan.priceMonthly),
-      new Decimal(0),
-    );
+    // COALESCE garantit toujours une ligne avec une valeur non-nulle
+    const mrr = new Decimal(mrrRows[0]?.mrr ?? '0');
 
     const conversionBase = recentActive + recentExpired;
     const conversionRate = conversionBase > 0

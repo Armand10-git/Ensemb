@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../../common/prisma.module';
 import { EncryptionModule } from '../../common/encryption.module';
-import { AuditModule } from '../audit/audit.module';
 import { PlatformAdminAuthService } from './platform-admin-auth.service';
 import { PlatformAdminDashboardService } from './platform-admin-dashboard.service';
 import { PlatformAdminOrganizationsService } from './platform-admin-organizations.service';
@@ -23,7 +22,6 @@ import { PlatformAdminOrganizationsController } from './platform-admin-organizat
   imports: [
     PrismaModule,
     EncryptionModule,
-    AuditModule,
     // Secret non posé ici — injecté dynamiquement dans PlatformAdminAuthService via ConfigService
     JwtModule.register({}),
   ],

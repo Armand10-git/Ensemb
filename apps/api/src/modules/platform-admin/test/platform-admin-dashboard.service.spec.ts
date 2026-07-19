@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { Decimal } from '@prisma/client/runtime/library';
 import { PlatformAdminDashboardService } from '../platform-admin-dashboard.service';
 import { PrismaService } from '../../../common/prisma.service';
 import { RedisService } from '../../../common/redis.service';
@@ -10,8 +9,8 @@ const mockRedis = {
 };
 
 const mockPrisma = {
+  $queryRaw: jest.fn(),
   subscription: {
-    findMany: jest.fn(),
     count: jest.fn(),
   },
   organization: {
@@ -51,17 +50,14 @@ describe('PlatformAdminDashboardService', () => {
 
     const result = await service.getMetrics();
 
-    expect(mockPrisma.subscription.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
     expect(result.mrr).toBe('15000');
     expect(result.activeOrganizations).toBe(10);
   });
 
-  it('calcule les métriques Prisma et écrit en cache si miss', async () => {
+  it('calcule les métriques via $queryRaw (MRR) et Prisma (compteurs), écrit en cache', async () => {
     mockRedis.get.mockResolvedValue(null);
-    mockPrisma.subscription.findMany.mockResolvedValue([
-      { plan: { priceMonthly: new Decimal('5000') } },
-      { plan: { priceMonthly: new Decimal('15000') } },
-    ]);
+    (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ mrr: '20000' }]);
     mockPrisma.subscription.count
       .mockResolvedValueOnce(2)   // activeCount
       .mockResolvedValueOnce(3)   // trialingCount
@@ -74,27 +70,26 @@ describe('PlatformAdminDashboardService', () => {
 
     const result = await service.getMetrics();
 
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(mockRedis.set).toHaveBeenCalledWith('platform:dashboard:metrics', expect.any(String), 600);
-    // MRR = 5000 + 15000 = 20000, retourné en string Decimal
     expect(result.mrr).toBe('20000');
     expect(result.activeOrganizations).toBe(2);
     expect(result.trialingOrganizations).toBe(3);
     expect(result.failedInvoices).toBe(5);
   });
 
-  it('calcule le MRR en Decimal — pas de perte de précision float', async () => {
+  it('MRR retourné en string Decimal exact — pas de perte de précision float', async () => {
     mockRedis.get.mockResolvedValue(null);
-    // Montant avec décimales
-    mockPrisma.subscription.findMany.mockResolvedValue([
-      { plan: { priceMonthly: new Decimal('10000.50') } },
-      { plan: { priceMonthly: new Decimal('9999.50') } },
-    ]);
+    // PostgreSQL retourne le SUM d'un NUMERIC comme string
+    (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ mrr: '10000.50' }]);
     mockPrisma.subscription.count.mockResolvedValue(0);
     mockPrisma.organization.count.mockResolvedValue(0);
     mockPrisma.invoice.count.mockResolvedValue(0);
 
     const result = await service.getMetrics();
 
-    expect(result.mrr).toBe('20000');
+    // new Decimal('10000.50').toString() conserve la précision
+    expect(result.mrr).toBe('10000.5');
+    expect(typeof result.mrr).toBe('string');
   });
 });

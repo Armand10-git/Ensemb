@@ -53,6 +53,7 @@ const mockPrisma = {
 const mockJwt = {
   signAsync: jest.fn().mockResolvedValue('signed-token'),
   verifyAsync: jest.fn(),
+  decode: jest.fn(),
 };
 
 const mockConfig = {
@@ -192,6 +193,26 @@ describe('PlatformAdminAuthService', () => {
 
       const updateCall = mockPrisma.platformAdmin.update.mock.calls[0] as [{ data: { totpEnabled: boolean } }];
       expect(updateCall[0].data.totpEnabled).toBe(true);
+    });
+  });
+
+  describe('logout()', () => {
+    it('blackliste le refresh token si sub correspond à l\'admin appelant', async () => {
+      mockJwt.decode.mockReturnValue({ sub: 'admin-uuid' });
+      await service.logout('valid-refresh-token', 'admin-uuid');
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        'platform:refresh:valid-refresh-token', '1', expect.any(Number),
+      );
+    });
+
+    it('retourne 401 si sub du refreshToken ne correspond pas à l\'admin appelant', async () => {
+      mockJwt.decode.mockReturnValue({ sub: 'other-admin-uuid' });
+      await expect(service.logout('bad-token', 'admin-uuid')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('retourne 401 si le refreshToken est malformé (decode retourne null)', async () => {
+      mockJwt.decode.mockReturnValue(null);
+      await expect(service.logout('malformed-token', 'admin-uuid')).rejects.toThrow(UnauthorizedException);
     });
   });
 

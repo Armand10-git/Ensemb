@@ -201,8 +201,17 @@ export class PlatformAdminAuthService {
 
   /**
    * Révoque le refresh token plateforme (blacklist Redis).
+   * Vérifie que le token appartient à l'admin appelant pour éviter
+   * qu'un admin invalide la session d'un autre.
+   *
+   * @param refreshToken  - Token JWT brut à révoquer
+   * @param callerAdminId - UUID de l'admin authentifié (extrait du guard)
    */
-  async logout(refreshToken: string): Promise<void> {
+  async logout(refreshToken: string, callerAdminId: string): Promise<void> {
+    const payload = this.jwt.decode(refreshToken) as { sub?: string } | null;
+    if (!payload?.sub || payload.sub !== callerAdminId) {
+      throw new UnauthorizedException('Token non autorisé.');
+    }
     await this.redis.set(`platform:refresh:${refreshToken}`, '1', REFRESH_TTL_S);
   }
 

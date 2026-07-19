@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { RedisService } from '../../common/redis.service';
-import { AuditService } from '../audit/audit.service';
 
 /** TTL de la clé de suspension en Redis = durée max du refresh token tenant (7 jours). */
 const ORG_SUSPENDED_TTL_S = 7 * 24 * 60 * 60;
@@ -24,16 +23,16 @@ export interface PaginatedResult<T> {
 /**
  * Gestion des organisations depuis la console plateforme.
  *
- * La suspension pose une clé Redis platform:org-suspended:<orgId> vérifiée
- * par JwtRefreshStrategy pour bloquer immédiatement les utilisateurs de l'org
- * sans invalider chaque token individuellement.
+ * suspend/reactivate utilisent une `$transaction` Prisma pour garantir
+ * l'atomicité entre la mise à jour du statut et la trace d'audit.
+ * Redis est posé/supprimé après la transaction (Redis ne peut pas participer
+ * à une transaction Postgres).
  */
 @Injectable()
 export class PlatformAdminOrganizationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -83,12 +82,13 @@ export class PlatformAdminOrganizationsService {
   }
 
   /**
-   * Suspend une organisation.
+   * Suspend une organisation (idempotent si déjà suspendue).
    *
-   * Actions :
+   * Actions atomiques (Prisma $transaction) :
    * 1. Organization.status → SUSPENDED
-   * 2. Clé Redis platform:org-suspended:<orgId> posée (TTL 7j) — bloque tous les refresh
-   * 3. AuditLog avec actorType PLATFORM_ADMIN
+   * 2. AuditLog créé
+   * Puis (hors transaction) :
+   * 3. Clé Redis platform:org-suspended:<orgId> posée (TTL 7j) — bloque tous les refresh
    *
    * @param orgId   - UUID de l'organisation à suspendre
    * @param actorId - UUID du PlatformAdmin effectuant l'action
@@ -96,38 +96,42 @@ export class PlatformAdminOrganizationsService {
   async suspendOrganization(orgId: string, actorId: string): Promise<void> {
     const org = await this.prisma.organization.findUnique({
       where: { id: orgId },
-      select: { id: true, status: true, name: true },
+      select: { id: true, status: true },
     });
     if (!org) throw new NotFoundException('Organisation introuvable.');
+    if (org.status === 'SUSPENDED') return;
 
     const before = { status: org.status };
-    await this.prisma.organization.update({
-      where: { id: orgId },
-      data: { status: 'SUSPENDED' },
-    });
+    await this.prisma.$transaction([
+      this.prisma.organization.update({
+        where: { id: orgId },
+        data: { status: 'SUSPENDED' },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          organizationId: orgId,
+          actorType: 'PLATFORM_ADMIN',
+          actorId,
+          action: 'organization.suspend',
+          entity: 'Organization',
+          entityId: orgId,
+          before,
+          after: { status: 'SUSPENDED' },
+        },
+      }),
+    ]);
 
-    // Bloque immédiatement tous les refresh tokens tenant pour cette org
     await this.redis.set(`platform:org-suspended:${orgId}`, '1', ORG_SUSPENDED_TTL_S);
-
-    await this.audit.create({
-      organizationId: orgId,
-      actorType: 'PLATFORM_ADMIN',
-      actorId,
-      action: 'organization.suspend',
-      entity: 'Organization',
-      entityId: orgId,
-      before,
-      after: { status: 'SUSPENDED' },
-    });
   }
 
   /**
-   * Réactive une organisation suspendue.
+   * Réactive une organisation suspendue (idempotent si déjà active).
    *
-   * Actions :
+   * Actions atomiques (Prisma $transaction) :
    * 1. Organization.status → ACTIVE
-   * 2. Suppression de la clé Redis platform:org-suspended:<orgId>
-   * 3. AuditLog avec actorType PLATFORM_ADMIN
+   * 2. AuditLog créé
+   * Puis (hors transaction) :
+   * 3. Clé Redis platform:org-suspended:<orgId> supprimée
    *
    * @param orgId   - UUID de l'organisation à réactiver
    * @param actorId - UUID du PlatformAdmin effectuant l'action
@@ -138,24 +142,28 @@ export class PlatformAdminOrganizationsService {
       select: { id: true, status: true },
     });
     if (!org) throw new NotFoundException('Organisation introuvable.');
+    if (org.status === 'ACTIVE') return;
 
     const before = { status: org.status };
-    await this.prisma.organization.update({
-      where: { id: orgId },
-      data: { status: 'ACTIVE' },
-    });
+    await this.prisma.$transaction([
+      this.prisma.organization.update({
+        where: { id: orgId },
+        data: { status: 'ACTIVE' },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          organizationId: orgId,
+          actorType: 'PLATFORM_ADMIN',
+          actorId,
+          action: 'organization.reactivate',
+          entity: 'Organization',
+          entityId: orgId,
+          before,
+          after: { status: 'ACTIVE' },
+        },
+      }),
+    ]);
 
     await this.redis.del(`platform:org-suspended:${orgId}`);
-
-    await this.audit.create({
-      organizationId: orgId,
-      actorType: 'PLATFORM_ADMIN',
-      actorId,
-      action: 'organization.reactivate',
-      entity: 'Organization',
-      entityId: orgId,
-      before,
-      after: { status: 'ACTIVE' },
-    });
   }
 }
