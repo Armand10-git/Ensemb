@@ -156,8 +156,28 @@ model Organization {
   roles        Role[]
   subscription Subscription?
   invoices     Invoice[]
+  smtpServer   SmtpServer?
 
   @@map("organizations")
+}
+
+/// Configuration SMTP par organisation — mot de passe chiffré AES-256-GCM (§17 point S).
+/// Ne jamais exposer passwordCipher dans une réponse HTTP.
+model SmtpServer {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @unique @db.Uuid
+  host           String
+  port           Int          @default(587)
+  username       String
+  /// Chiffré en AES-256-GCM — format stocké : "iv:authTag:ciphertext" (hex)
+  passwordCipher String
+  fromEmail      String
+  fromName       String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("smtp_servers")
 }
 
 /// Compte staff plateforme — auth séparée de celle des utilisateurs tenant.

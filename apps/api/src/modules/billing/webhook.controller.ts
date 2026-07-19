@@ -3,6 +3,7 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
+  Param,
   Post,
   Req,
   UnauthorizedException,
@@ -21,11 +22,17 @@ interface WebhookPayload {
   [key: string]: unknown;
 }
 
+interface PosWebhookPayload {
+  type: string;
+  providerEventId: string;
+  [key: string]: unknown;
+}
+
 /**
- * Endpoint public pour les webhooks de l'agrégateur de paiement.
+ * Endpoints publics pour les webhooks de l'agrégateur de paiement.
  *
  * Sécurité (§17 point V) :
- * 1. Corps lu en Buffer brut pour la vérification HMAC — NestJS doit être démarré avec rawBody: true
+ * 1. Corps lu en Buffer brut pour la vérification HMAC — NestJS démarré avec rawBody: true
  * 2. Signature vérifiée AVANT tout accès à la base
  * 3. WebhookEvent persisté avec contrainte unique (provider, providerEventId) avant traitement
  * 4. Réponse 200 systématique même en cas d'erreur interne (évite les retries de l'agrégateur)
@@ -49,7 +56,6 @@ export class WebhookController {
   async handleBillingWebhook(
     @Req() req: RawBodyRequest<Request>,
   ): Promise<{ received: true }> {
-    // 1. Vérification de la signature HMAC avant tout traitement (§17 point V)
     const rawBody = req.rawBody;
     if (!rawBody || rawBody.length === 0) {
       this.logger.warn('Webhook reçu sans corps brut — rawBody absent');
@@ -62,24 +68,21 @@ export class WebhookController {
       throw new UnauthorizedException('Signature invalide.');
     }
 
-    // 2. Parsing du payload JSON (déjà validé par la signature)
     let payload: WebhookPayload;
     try {
       payload = JSON.parse(rawBody.toString('utf8')) as WebhookPayload;
     } catch (err) {
-      this.logger.error('Webhook : JSON invalide après vérification HMAC', err);
-      // On répond 200 pour ne pas déclencher un retry inutile
+      this.logger.error('Webhook billing : JSON invalide après vérification HMAC', err);
       return { received: true };
     }
 
     const { type, provider, providerEventId } = payload;
-
     if (!provider || !providerEventId) {
-      this.logger.warn('Webhook sans provider ou providerEventId — ignoré');
+      this.logger.warn('Webhook billing sans provider ou providerEventId — ignoré');
       return { received: true };
     }
 
-    // 3. Résolution de l'organizationId via l'invoiceId (scope tenant sur le WebhookEvent)
+    // Résolution de l'organizationId via l'invoiceId (scope tenant sur le WebhookEvent)
     let organizationId: string | null = null;
     if (payload.invoiceId) {
       const inv = await this.prisma.invoice.findUnique({
@@ -89,60 +92,123 @@ export class WebhookController {
       organizationId = inv?.organizationId ?? null;
     }
 
-    // 4. Persistance du WebhookEvent avec contrainte d'unicité — garde d'idempotence
-    let webhookEventId: string | undefined;
+    // Garde d'idempotence — insert atomique avant tout traitement métier
+    const webhookEventId = await this.persistWebhookEvent(provider, providerEventId, payload, organizationId, payload.invoiceId);
+    if (webhookEventId === null) return { received: true }; // doublon ou erreur
+
+    // Traitement métier
+    if (type === 'payment.success') {
+      const invoiceId = payload.invoiceId;
+      if (!invoiceId) {
+        this.logger.warn(`Webhook billing payment.success sans invoiceId — ${providerEventId}`);
+        return { received: true };
+      }
+      try {
+        await this.billingService.confirmPayment(invoiceId);
+        this.logger.log(`Paiement billing confirmé — Invoice ${invoiceId}`);
+      } catch (err) {
+        this.logger.error(`Erreur confirmation paiement Invoice ${invoiceId}`, err);
+      }
+    }
+
+    this.markProcessed(webhookEventId);
+    return { received: true };
+  }
+
+  /**
+   * POST /api/v1/webhooks/payments/:organizationId
+   * Webhook POS mobile money — stub (PosModule à créer en S21b).
+   * Route publique — protégée par signature HMAC, idempotente via WebhookEvent.
+   */
+  @Post('payments/:organizationId')
+  @HttpCode(HttpStatus.OK)
+  async handlePosPaymentWebhook(
+    @Param('organizationId') organizationId: string,
+    @Req() req: RawBodyRequest<Request>,
+  ): Promise<{ received: true }> {
+    const rawBody = req.rawBody;
+    if (!rawBody || rawBody.length === 0) {
+      this.logger.warn(`Webhook POS [org ${organizationId}] reçu sans corps brut`);
+      throw new UnauthorizedException('Corps de requête absent.');
+    }
+
+    const signature = (req.headers['x-aggregator-signature'] as string) ?? '';
+    if (!this.aggregator.verifyWebhookSignature(rawBody, signature)) {
+      this.logger.warn(`Webhook POS [org ${organizationId}] rejeté : signature HMAC invalide`);
+      throw new UnauthorizedException('Signature invalide.');
+    }
+
+    let payload: PosWebhookPayload;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const evt = await (this.prisma.webhookEvent.create as (args: any) => Promise<{ id: string }>)({
+      payload = JSON.parse(rawBody.toString('utf8')) as PosWebhookPayload;
+    } catch (err) {
+      this.logger.error(`Webhook POS [org ${organizationId}] : JSON invalide`, err);
+      return { received: true };
+    }
+
+    const { type, providerEventId } = payload;
+    const provider = 'pos-aggregator';
+
+    if (!providerEventId) {
+      this.logger.warn(`Webhook POS [org ${organizationId}] sans providerEventId — ignoré`);
+      return { received: true };
+    }
+
+    // Garde d'idempotence — clé composite (provider, providerEventId)
+    const webhookEventId = await this.persistWebhookEvent(provider, providerEventId, payload, organizationId);
+    if (webhookEventId === null) return { received: true };
+
+    // Stub : PosPaymentService sera câblé en S21b (PosModule)
+    if (type === 'payment.success') {
+      this.logger.log(
+        `[STUB] Paiement mobile money confirmé — providerEventId ${providerEventId}, org ${organizationId} (PosModule non encore implémenté)`,
+      );
+    }
+
+    this.markProcessed(webhookEventId);
+    return { received: true };
+  }
+
+  /**
+   * Persiste le WebhookEvent avant tout traitement.
+   * @returns l'id du WebhookEvent créé, ou null si doublon/erreur.
+   */
+  private async persistWebhookEvent(
+    provider: string,
+    providerEventId: string,
+    payload: object,
+    organizationId: string | null,
+    invoiceId?: string,
+  ): Promise<string | null> {
+    try {
+      const evt = await this.prisma.webhookEvent.create({
         data: {
           provider,
           providerEventId,
-          payload: payload as object,
-          invoiceId: payload.invoiceId ?? null,
-          // organizationId : champ ajouté par migration 20260719200000 — types à régénérer après apply
+          payload,
+          invoiceId: invoiceId ?? null,
           organizationId,
         },
         select: { id: true },
       });
-      webhookEventId = evt.id;
+      return evt.id;
     } catch (err: unknown) {
-      // P2002 = violation de contrainte unique → événement déjà traité
       if (this.isPrismaUniqueViolation(err)) {
-        this.logger.warn(`Webhook ${provider}/${providerEventId} déjà traité — ignoré`);
-        return { received: true };
+        this.logger.warn(`Webhook ${provider}/${providerEventId} déjà traité — ignoré (doublon)`);
+        return null;
       }
-      this.logger.error(`Erreur lors de la persistance du WebhookEvent ${provider}/${providerEventId}`, err);
-      // On répond 200 même en cas d'erreur interne (pas de retry agrégateur)
-      return { received: true };
+      this.logger.error(`Erreur persistence WebhookEvent ${provider}/${providerEventId}`, err);
+      return null;
     }
+  }
 
-    // 5. Traitement métier
-    if (type === 'payment.success') {
-      const invoiceId = payload.invoiceId;
-      if (!invoiceId) {
-        this.logger.warn(`Webhook payment.success sans invoiceId — ${providerEventId}`);
-        return { received: true };
-      }
-
-      try {
-        await this.billingService.confirmPayment(invoiceId);
-        this.logger.log(`Paiement confirmé pour Invoice ${invoiceId}`);
-      } catch (err) {
-        // Erreur loggée côté serveur — on ne l'expose pas et on ne déclenche pas de retry
-        this.logger.error(`Erreur lors de la confirmation du paiement Invoice ${invoiceId}`, err);
-      }
-    }
-
-    // 6. Marque le WebhookEvent comme traité (best-effort, ne bloque pas la réponse)
-    if (webhookEventId) {
-      this.prisma.webhookEvent
-        .update({ where: { id: webhookEventId }, data: { processedAt: new Date() } })
-        .catch((err: unknown) =>
-          this.logger.error(`Impossible de mettre à jour processedAt pour ${webhookEventId}`, err),
-        );
-    }
-
-    return { received: true };
+  /** Marque le WebhookEvent comme traité — best-effort, ne bloque pas la réponse. */
+  private markProcessed(webhookEventId: string): void {
+    this.prisma.webhookEvent
+      .update({ where: { id: webhookEventId }, data: { processedAt: new Date() } })
+      .catch((err: unknown) =>
+        this.logger.error(`Impossible de mettre à jour processedAt pour ${webhookEventId}`, err),
+      );
   }
 
   private isPrismaUniqueViolation(err: unknown): boolean {

@@ -184,7 +184,7 @@
 - [ ] Les images Docker `api`/`web` démarrent en local via `docker-compose up` sans configuration manuelle
 - [ ] Les probes `/health` et `/ready` répondent correctement (DB et Redis coupées → `/ready` échoue proprement)
 - [ ] Logs structurés, métriques et alerting sont visibles dans les dashboards avant la bascule en production
-- [ ] Les secrets tenant en base (`SmtpServer.password`, clés agrégateur) sont illisibles dans un dump SQL brut (chiffrement applicatif vérifié, §17 point S)
+- [x] Les secrets tenant en base (`SmtpServer.password`, clés agrégateur) sont illisibles dans un dump SQL brut (chiffrement applicatif vérifié, §17 point S) ✅ T07b
 - [ ] Toute mutation sensible (suppression/annulation de document, changement de permissions, suspension d'organisation) laisse une trace exploitable dans `AuditLog` (acteur, avant/après)
 - [ ] La connexion `PlatformAdmin` exige un second facteur TOTP — refusée sans lui (§17 point W)
 - [ ] Le test d'isolation multi-tenant couvre la réutilisation de connexion du pool (`SET LOCAL`, §14 / §17 point T)
