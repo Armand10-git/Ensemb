@@ -129,49 +129,52 @@ describe('BillingModule (e2e)', () => {
     }, 15_000);
 
     it('après la fenêtre de lancement : trialEndsAt ≈ now + trialDurationDays', async () => {
-      // Passer launchPromoEndsAt dans le passé pour simuler fin de la fenêtre
+      const ORIGINAL_VALUE = '"2026-09-30T23:59:59Z"';
       const pastDate = new Date('2026-01-01T00:00:00Z');
+
+      // Passer launchPromoEndsAt dans le passé ; toujours restaurer même en cas d'échec
       await prisma.platformSetting.update({
         where: { key: 'launchPromoEndsAt' },
         data: { value: `"${pastDate.toISOString()}"` },
       });
 
-      const subdomain = `${PREFIX}-post-window`;
-      const before = Date.now();
+      try {
+        const subdomain = `${PREFIX}-post-window`;
+        const before = Date.now();
 
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/public/organizations/register')
-        .send({
-          subdomain,
-          organizationName: 'Org Post-Fenêtre T06',
-          adminFirstname: 'Bob',
-          adminLastname: 'Dupont',
-          adminEmail: `admin@${subdomain}.test`,
-          adminPassword: 'MotDePasse456!',
-        })
-        .expect(201);
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/public/organizations/register')
+          .send({
+            subdomain,
+            organizationName: 'Org Post-Fenêtre T06',
+            adminFirstname: 'Bob',
+            adminLastname: 'Dupont',
+            adminEmail: `admin@${subdomain}.test`,
+            adminPassword: 'MotDePasse456!',
+          })
+          .expect(201);
 
-      const after = Date.now();
-      const { organizationId } = res.body as { organizationId: string };
+        const after = Date.now();
+        const { organizationId } = res.body as { organizationId: string };
 
-      const subscription = await prisma.subscription.findUnique({
-        where: { organizationId },
-        include: { plan: true },
-      });
+        const subscription = await prisma.subscription.findUnique({
+          where: { organizationId },
+          include: { plan: true },
+        });
 
-      expect(subscription).not.toBeNull();
-      expect(subscription!.status).toBe('TRIALING');
+        expect(subscription).not.toBeNull();
+        expect(subscription!.status).toBe('TRIALING');
 
-      const thirtyDaysMs = subscription!.plan.trialDurationDays * 24 * 60 * 60 * 1000;
-      const periodEnd = subscription!.currentPeriodEnd.getTime();
-      expect(periodEnd).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
-      expect(periodEnd).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
-
-      // Restaurer la valeur d'origine (seed)
-      await prisma.platformSetting.update({
-        where: { key: 'launchPromoEndsAt' },
-        data: { value: '"2026-09-30T23:59:59Z"' },
-      });
+        const thirtyDaysMs = subscription!.plan.trialDurationDays * 24 * 60 * 60 * 1000;
+        const periodEnd = subscription!.currentPeriodEnd.getTime();
+        expect(periodEnd).toBeGreaterThanOrEqual(before + thirtyDaysMs - 1000);
+        expect(periodEnd).toBeLessThanOrEqual(after + thirtyDaysMs + 1000);
+      } finally {
+        await prisma.platformSetting.update({
+          where: { key: 'launchPromoEndsAt' },
+          data: { value: ORIGINAL_VALUE },
+        });
+      }
     }, 20_000);
   });
 

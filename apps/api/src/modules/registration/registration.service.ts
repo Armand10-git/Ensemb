@@ -28,7 +28,7 @@ export function computeTrialPeriod(
   trialDurationDays: number,
 ): Date {
   if (launchPromoEndsAt !== null && now < launchPromoEndsAt) {
-    return launchPromoEndsAt;
+    return new Date(launchPromoEndsAt.getTime());
   }
   return new Date(now.getTime() + trialDurationDays * 24 * 60 * 60 * 1000);
 }
@@ -102,8 +102,14 @@ export class RegistrationService {
         // Désérialisation de la valeur JSON stockée dans PlatformSetting
         let launchPromoEndsAt: Date | null = null;
         if (launchPromoSetting) {
-          const raw = JSON.parse(launchPromoSetting.value) as string;
-          launchPromoEndsAt = new Date(raw);
+          const parsed: unknown = JSON.parse(launchPromoSetting.value);
+          if (typeof parsed === 'string') {
+            const d = new Date(parsed);
+            // Rejeter les valeurs non-parsables (Invalid Date)
+            if (!isNaN(d.getTime())) {
+              launchPromoEndsAt = d;
+            }
+          }
         }
 
         const trialEndsAt = computeTrialPeriod(now, launchPromoEndsAt, starterPlan.trialDurationDays);

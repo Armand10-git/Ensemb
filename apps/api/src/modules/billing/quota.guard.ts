@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
+import type { Plan } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
 import { BillingService } from './billing.service';
 import { QUOTA_RESOURCE_KEY, type QuotaResource } from './check-quota.decorator';
@@ -58,6 +59,9 @@ export class QuotaGuard implements CanActivate {
     // Limite null = illimité — on laisse passer sans compter
     if (limit === null) return true;
 
+    // DETTE : le count et la création ne sont pas dans la même transaction (TOCTOU).
+    // Pour une garantie absolue, les modules de création (ex. UsersModule) doivent
+    // recompter à l'intérieur de leur propre transaction de création (Bloc C).
     const count = await this.countResource(resource, organizationId);
 
     if (count >= limit) {
@@ -69,7 +73,7 @@ export class QuotaGuard implements CanActivate {
     return true;
   }
 
-  private getLimit(resource: QuotaResource, plan: { maxUsers: number | null; maxWarehouses: number | null; maxProducts: number | null }): number | null {
+  private getLimit(resource: QuotaResource, plan: Pick<Plan, 'maxUsers' | 'maxWarehouses' | 'maxProducts'>): number | null {
     switch (resource) {
       case 'users': return plan.maxUsers;
       case 'warehouses': return plan.maxWarehouses;

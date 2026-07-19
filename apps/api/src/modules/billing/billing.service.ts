@@ -43,11 +43,19 @@ export class BillingService {
 
     if (!setting) return null;
 
+    let parsed: unknown;
     try {
-      return JSON.parse(setting.value) as string;
+      parsed = JSON.parse(setting.value);
     } catch {
       this.logger.error(`PlatformSetting "${key}" contient une valeur JSON invalide : ${setting.value}`);
       throw new InternalServerErrorException('Erreur de configuration interne.');
     }
+
+    if (typeof parsed !== 'string') {
+      this.logger.error(`PlatformSetting "${key}" n'est pas une chaîne : ${JSON.stringify(parsed)}`);
+      throw new InternalServerErrorException('Erreur de configuration interne.');
+    }
+
+    return parsed;
   }
 }
