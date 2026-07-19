@@ -154,6 +154,17 @@ export class WebhookController {
       return { received: true };
     }
 
+    // Vérification que l'organisation existe (§17 — tout accès vérifie organizationId côté serveur)
+    const orgExists = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true },
+    });
+    if (!orgExists) {
+      this.logger.warn(`Webhook POS — organizationId inconnu : ${organizationId}`);
+      // 200 pour ne pas révéler à l'agrégateur si l'org existe (même pattern que les autres erreurs)
+      return { received: true };
+    }
+
     // Garde d'idempotence — clé composite (provider, providerEventId)
     const webhookEventId = await this.persistWebhookEvent(provider, providerEventId, payload, organizationId);
     if (webhookEventId === null) return { received: true };
@@ -197,6 +208,9 @@ export class WebhookController {
         this.logger.warn(`Webhook ${provider}/${providerEventId} déjà traité — ignoré (doublon)`);
         return null;
       }
+      // Erreur DB hors-P2002 : l'événement est perdu — on répond 200 pour ne pas déclencher
+      // un retry infini de l'agrégateur (spec §17 point V). Dette : ajouter un compteur
+      // payment_webhook_lost_total (Prometheus) pour alerter sur des pertes en rafale (T08+).
       this.logger.error(`Erreur persistence WebhookEvent ${provider}/${providerEventId}`, err);
       return null;
     }

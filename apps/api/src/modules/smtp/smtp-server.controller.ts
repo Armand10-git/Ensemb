@@ -8,7 +8,6 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
@@ -16,11 +15,7 @@ import { Auditable } from '../audit/auditable.decorator';
 import { SmtpServerService } from './smtp-server.service';
 import { SmtpServerSchema } from './dto/smtp-server.dto';
 import type { SmtpServerPublicDto } from './dto/smtp-server.dto';
-import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
-
-interface AuthRequest extends Request {
-  user: AuthenticatedUser;
-}
+import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 /**
  * Endpoint de configuration SMTP par organisation.
@@ -41,7 +36,7 @@ export class SmtpServerController {
   @Auditable({ action: 'ORGANIZATION_SMTP_UPDATE', entity: 'SmtpServer' })
   async upsert(
     @Body() body: unknown,
-    @Req() req: AuthRequest,
+    @Req() req: AuthenticatedRequest,
   ): Promise<SmtpServerPublicDto> {
     const result = SmtpServerSchema.safeParse(body);
     if (!result.success) {
