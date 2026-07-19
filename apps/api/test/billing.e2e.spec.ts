@@ -8,8 +8,9 @@
  */
 import { Controller, INestApplication, Post, UseGuards } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
@@ -49,6 +50,12 @@ describe('BillingModule (e2e)', () => {
       imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+        BullModule.forRootAsync({
+          inject: [ConfigService],
+          useFactory: (config: ConfigService) => ({
+            connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+          }),
+        }),
         PassportModule,
         JwtModule.register({}),
         PrismaModule,

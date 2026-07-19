@@ -24,6 +24,13 @@ enum SubscriptionStatus {
   SUSPENDED
 }
 
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELED
+}
+
 /// Plan tarifaire de la plateforme. Valeurs modifiables par le staff plateforme sans déploiement.
 model Plan {
   id                    String         @id @default(uuid()) @db.Uuid
@@ -66,8 +73,49 @@ model Subscription {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
+  invoices          Invoice[]
+
   @@index([planId])
   @@map("subscriptions")
+}
+
+/// Facture générée pour une période d'abonnement. Persist avant activation.
+model Invoice {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  subscriptionId String        @db.Uuid
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("XAF")
+  status         InvoiceStatus @default(PENDING)
+  /// URL de paiement générée par l'agrégateur
+  paymentLink    String?
+  paidAt         DateTime?
+  dueAt          DateTime
+  /// "monthly" | "annual" — conservé pour la relance automatique (invoice.renew)
+  period         String        @default("monthly")
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  subscription   Subscription  @relation(fields: [subscriptionId], references: [id])
+  webhookEvents  WebhookEvent[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId, status])
+  @@map("invoices")
+}
+
+/// Événement webhook persisté avant tout traitement (idempotence §17 point V).
+/// La contrainte unique (provider, providerEventId) garantit qu'un rejeu est ignoré.
+model WebhookEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  provider        String
+  providerEventId String
+  payload         Json
+  processedAt     DateTime @default(now())
+  invoiceId       String?  @db.Uuid
+  invoice         Invoice? @relation(fields: [invoiceId], references: [id])
+
+  @@unique([provider, providerEventId])
+  @@map("webhook_events")
 }
 
 /// Paramètres plateforme modifiables sans redéploiement (clé/valeur JSON sérialisé).
@@ -102,6 +150,7 @@ model Organization {
   users        User[]
   roles        Role[]
   subscription Subscription?
+  invoices     Invoice[]
 
   @@map("organizations")
 }

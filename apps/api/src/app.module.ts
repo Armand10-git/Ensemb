@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './common/prisma.module';
 import { RedisModule } from './common/redis.module';
 import { TenancyModule } from './tenancy/tenancy.module';
@@ -18,6 +19,13 @@ import { BillingModule } from './modules/billing/billing.module';
     ConfigModule.forRoot({ isGlobal: true }),
     // Rate limiting global : 20 req/min par IP par défaut ; routes spécifiques via @Throttle()
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
+    // Connexion BullMQ globale — partagée par toutes les queues (billing, etc.)
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: { url: config.getOrThrow<string>('REDIS_URL') },
+      }),
+    }),
     PrismaModule,
     RedisModule,
     TenancyModule,

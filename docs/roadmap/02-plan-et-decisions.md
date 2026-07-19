@@ -72,8 +72,8 @@
 ### P8 — Paiements, facturation SaaS & intégrations externes
 - [ ] `PaymentsModule` : espèces (calcul monnaie rendue) + agrégateur de paiement (carte/mobile money, mapping client↔compte, confirmation par webhook), identifiants API propres à chaque organisation — webhooks **idempotents** via `WebhookEvent` (§17, point V), secrets tenant chiffrés en base avant écriture (§17, point S)
 - [x] `BillingModule` — T06 : `Plan`, `Subscription`, `PlatformSetting`, seed des 3 plans XAF, `computeTrialPeriod()`, `QuotaGuard` + `@CheckQuota()` sur les endpoints de création (403 explicite, jamais 500)
-- [ ] `BillingModule` — T07 : `Invoice`, intégration agrégateur de paiement récurrent, `billing-queue` (vérification plafond CA d'essai après chaque vente)
-- [ ] Intégration de l'agrégateur de paiement pour la facturation récurrente de la plateforme : lien de paiement généré à chaque échéance (`billing-queue`), webhook dédié qui confirme et prolonge l'abonnement
+- [x] `BillingModule` — T07 : `Invoice`, `WebhookEvent`, `PaymentAggregatorService`, `billing-queue` (BullMQ), `BillingWorker`, lien de paiement à la souscription, webhook HMAC idempotent, vérification plafond CA d'essai
+- [x] Intégration de l'agrégateur de paiement pour la facturation récurrente de la plateforme : lien de paiement généré à chaque échéance (`billing-queue`), webhook dédié qui confirme et prolonge l'abonnement
 - [ ] `NotificationsModule` : consumers `email-queue`/`sms-queue` (Nodemailer + Twilio SDK)
 - [ ] `pdf-queue` : templates HTML → PDF (Puppeteer, brandés par organisation) pour factures/devis/retours/paiements
 - [ ] SMTP dynamique stocké en base (table `SmtpServer`, une par organisation), jamais dans un fichier `.env`
@@ -177,7 +177,7 @@
 - [ ] Un compte tenant normal ne peut jamais atteindre les endpoints/écrans réservés au staff plateforme, même en devinant l'URL
 - [ ] Une facture d'abonnement se génère à échéance, le paiement par carte ou mobile money la clôture via webhook, et l'abonnement se prolonge en conséquence
 - [x] Une inscription pendant la fenêtre de lancement n'a aucun plafond de CA (`trialEndsAt = launchPromoEndsAt`) — T06
-- [ ] Une inscription après la fenêtre est coupée dès que son CA cumulé dépasse `Plan.trialRevenueCapAmount`, sans attendre la fin du mois d'essai — T07 (`billing-queue`)
+- [x] Une inscription après la fenêtre est coupée dès que son CA cumulé dépasse `Plan.trialRevenueCapAmount`, sans attendre la fin du mois d'essai — T07 (`billing-queue`) ✅
 - [x] `PlatformSetting.launchPromoEndsAt` et `Plan.trialRevenueCapAmount` modifiables en base sans redéploiement — T06
 - [ ] Écran d'administration plateforme pour modifier ces valeurs sans passer par SQL — T08 (`PlatformAdminModule`)
 - [ ] Le pipeline CI (lint/typecheck/test/build) est vert sur `main`, avec cache Turborepo distant actif
@@ -188,7 +188,7 @@
 - [ ] Toute mutation sensible (suppression/annulation de document, changement de permissions, suspension d'organisation) laisse une trace exploitable dans `AuditLog` (acteur, avant/après)
 - [ ] La connexion `PlatformAdmin` exige un second facteur TOTP — refusée sans lui (§17 point W)
 - [ ] Le test d'isolation multi-tenant couvre la réutilisation de connexion du pool (`SET LOCAL`, §14 / §17 point T)
-- [ ] Un webhook de paiement rejoué à l'identique est acquitté sans aucun effet métier (idempotence `WebhookEvent`)
+- [x] Un webhook de paiement rejoué à l'identique est acquitté sans aucun effet métier (idempotence `WebhookEvent`) ✅ T07
 - [ ] Deux créations simultanées de documents dans la même organisation ne produisent jamais de collision de `reference` (test de concurrence sur `DocumentCounter`, §17 point X)
 - [ ] Un paiement mobile money non confirmé expire proprement : la vente `AWAITING_PAYMENT` est annulée et le stock restitué (§18.2 étape 10)
 - [ ] L'annulation d'une vente validée restitue le stock et journalise l'acteur et la raison (§18.18)
@@ -289,7 +289,7 @@ Décisions transverses qui s'appliquent à plusieurs sections du document, regro
 | O | Domaine personnalisé | Hors périmètre de cette itération ; champ `Organization.customDomain` prévu au schéma dès maintenant pour ne pas bloquer son ajout plus tard | §4, §12.7 |
 | P | Topologie de domaines | `monapp.com`/`www` → `apps/marketing` (vitrine, hors tenant) ; `{subdomain}.monapp.com` → `apps/web` résolu par tenant ; `admin.monapp.com` → `apps/web` route group `platform-admin/`, auth `PlatformAdmin` séparée | §9, §12.7 |
 | Q | Tableau de bord plateforme | Indicateurs business (MRR, conversion essai→payant, churn, factures en échec) agrégés tous tenants confondus, mis en cache et recalculés périodiquement — jamais calculés à la volée sur l'ensemble des `Subscription`/`Invoice` à chaque chargement | §5, §18.16, T08 |
-| R | Politique d'essai | Fenêtre de lancement de 2 mois calendaires (`PlatformSetting.launchPromoEndsAt`) : accès gratuit sans plafond de CA pour tout inscrit durant cette fenêtre. Après la fenêtre : essai standard de `Plan.trialDurationDays` (30 jours par défaut), coupé plus tôt si le CA cumulé de l'organisation dépasse `Plan.trialRevenueCapAmount` — seuil configurable par le staff plateforme, sans valeur imposée par défaut. ✅ T06 — `computeTrialPeriod(now, launchPromoEndsAt, trialDurationDays)` dans `RegistrationService`, `Subscription TRIALING` atomique, seed `launchPromoEndsAt = "2026-09-30T23:59:59Z"`. Reste : surveillance CA post-vente (T07 `billing-queue`), écran d'administration (T08). | §4, §5, §18.0, §18.15, T06, T07, T08 |
+| R | Politique d'essai | Fenêtre de lancement de 2 mois calendaires (`PlatformSetting.launchPromoEndsAt`) : accès gratuit sans plafond de CA pour tout inscrit durant cette fenêtre. Après la fenêtre : essai standard de `Plan.trialDurationDays` (30 jours par défaut), coupé plus tôt si le CA cumulé de l'organisation dépasse `Plan.trialRevenueCapAmount` — seuil configurable par le staff plateforme, sans valeur imposée par défaut. ✅ T06 — `computeTrialPeriod(now, launchPromoEndsAt, trialDurationDays)` dans `RegistrationService`, `Subscription TRIALING` atomique, seed `launchPromoEndsAt = "2026-09-30T23:59:59Z"`. ✅ T07 — `BillingService.checkTrialCap()` via `billing-queue` `billing.checkTrialCap` (job 24h repeat) : `invoice.aggregate` CA cumulé >= `trialRevenueCapAmount` → Subscription PAST_DUE + `trialEndedReason = REVENUE_CAP` + Socket.io `organization:trialCapReached`. Reste : écran d'administration (T08). | §4, §5, §18.0, §18.15, T06, T07, T08 |
 | S | Secrets tenant en base | Chiffrement applicatif AES-256-GCM avant écriture (`SmtpServer.password`, clés agrégateur par tenant) ; clé maîtresse `APP_ENCRYPTION_KEY` en variable d'environnement/KMS, rotation documentée | §4, §12.4, P8, T07b, checklist §15 |
 | T | RLS & pooling de connexions | `app.current_tenant` posé via `SET LOCAL` dans la transaction, jamais en `SET` de session — sinon fuite de tenant à la réutilisation de connexion ; test d'isolation simulant la réutilisation | §14, T02/T03, checklist §15 |
 | U | Journal d'audit | Modèle `AuditLog` + interceptor global (`AuditModule`) sur toute mutation sensible, tenant et plateforme confondus (acteur, entité, avant/après) | §4, §5, P1, S08b, checklist §15 |

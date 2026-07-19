@@ -12,6 +12,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^10.4.19",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^10.4.19",
@@ -25,6 +26,7 @@
     "@prisma/client": "^5.22.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.80.9",
     "helmet": "^8.3.0",
     "ioredis": "^5.11.1",
     "passport": "^0.7.0",
