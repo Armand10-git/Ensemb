@@ -46,6 +46,11 @@ export class RealtimeGateway
    * Branche le Redis adapter pour la diffusion multi-instance dès que le serveur est prêt.
    */
   afterInit(server: Server): void {
+    // En environnement de test le serveur Socket.io est un stub sans adapter() — on l'ignore
+    if (!server || typeof (server as { adapter?: unknown }).adapter !== 'function') {
+      this.logger.warn('Gateway Socket.io : serveur sans adapter, Redis adapter ignoré (test ?)');
+      return;
+    }
     const redisUrl = this.config.get<string>('REDIS_URL') ?? 'redis://localhost:6379';
     const pub = new Redis(redisUrl);
     const sub = pub.duplicate();

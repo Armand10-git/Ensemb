@@ -2,12 +2,12 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
-import { json } from 'express';
 import { AppModule } from './app.module';
 import { PrismaService } from './common/prisma.service';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true expose req.rawBody (Buffer) pour la vérification HMAC des webhooks (§17 point V)
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   // Préfixe global — toutes les routes répondent sous /api/v1 (§17 point AA)
   // /health et /ready sont exclus car appelés sans préfixe par l'orchestrateur
@@ -25,9 +25,6 @@ async function bootstrap(): Promise<void> {
     },
     credentials: true,
   });
-
-  // Limite la taille du body JSON pour éviter les attaques par payload géant
-  app.use(json({ limit: '10kb' }));
 
   // Pipe global : whitelist des propriétés, rejet des champs inconnus
   app.useGlobalPipes(
