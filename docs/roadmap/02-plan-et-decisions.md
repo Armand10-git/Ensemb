@@ -92,6 +92,7 @@
 - [ ] `OrganizationsModule` : écran de personnalisation (logo, couleur primaire avec contrôle de contraste, aperçu en direct — §3, §18)
 - [ ] `PlatformAdminModule` : écran séparé de gestion des organisations (liste, statut d'abonnement, suspension/réactivation), inaccessible depuis un sous-domaine tenant
 - [x] `BackupModule` : export de données par organisation à la demande (CSV/JSON), listing/téléchargement/suppression, purge auto ; le `pg_dump` complet devient une tâche d'exploitation plateforme, pas une fonctionnalité tenant (T09 ✅ 2026-07-19)
+- [x] `apps/marketing` : vitrine publique (accueil, tarifs, FindOrgForm), déployable indépendamment de `apps/web`/`apps/api` ; **Bloc B2 complet** (T01–T10 ✅ 2026-07-19)
 
 ### P12 — Application mobile
 - [ ] Init Expo app, `expo-router`, design system partagé (`nativewind`), écran de résolution de tenant (identifiant d'organisation avant login, §10)
