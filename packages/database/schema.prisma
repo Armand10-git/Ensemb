@@ -131,3 +131,22 @@ model PermissionOnRole {
   @@id([roleId, permissionId])
   @@map("permissions_on_roles")
 }
+
+/// Journal d'audit des mutations sensibles (§17 point U).
+/// organizationId est nullable pour les actions du staff plateforme.
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  actorType      String                            // "USER" | "PLATFORM_ADMIN" | "SYSTEM"
+  actorId        String?  @db.Uuid
+  action         String                            // ex. "roles.update", "permissions.assign"
+  entity         String                            // nom du modèle, ex. "Role"
+  entityId       String?  @db.Uuid
+  before         Json?
+  after          Json?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}

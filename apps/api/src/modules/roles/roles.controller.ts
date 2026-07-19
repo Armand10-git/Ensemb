@@ -24,25 +24,10 @@ import { UpdateRoleSchema } from './dto/update-role.dto';
 import { ManagePermissionsSchema } from './dto/manage-permissions.dto';
 import { AssignRoleSchema } from './dto/assign-role.dto';
 import type { AuthenticatedUser } from '../auth/strategies/jwt.strategy';
+import { Auditable } from '../audit/auditable.decorator';
 
 interface AuthRequest extends Request {
   user: AuthenticatedUser;
-}
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Résout et valide l'organizationId depuis l'en-tête X-Organization-Id.
- * DETTE (T02) : à remplacer par résolution automatique via sous-domaine (TenancyModule).
- */
-function resolveOrgId(req: Request): string {
-  const orgId = req.headers['x-organization-id'];
-  if (typeof orgId !== 'string' || !UUID_REGEX.test(orgId)) {
-    throw new UnprocessableEntityException(
-      'En-tête X-Organization-Id manquant ou invalide (UUID attendu).',
-    );
-  }
-  return orgId;
 }
 
 function parsePagination(page: unknown, limit: unknown) {
@@ -64,16 +49,14 @@ export class RolesController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    const organizationId = resolveOrgId(req);
-    return this.rolesService.findAll(organizationId, parsePagination(page, limit));
+    return this.rolesService.findAll(req.user.organizationId, parsePagination(page, limit));
   }
 
   /** GET /api/v1/roles/:id — détail d'un rôle avec ses permissions. */
   @RequirePermission('permissions.view')
   @Get(':id')
   findOne(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
-    const organizationId = resolveOrgId(req);
-    return this.rolesService.findOne(organizationId, id);
+    return this.rolesService.findOne(req.user.organizationId, id);
   }
 
   /** POST /api/v1/roles — crée un rôle. */
@@ -81,57 +64,57 @@ export class RolesController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@Req() req: AuthRequest, @Body() body: unknown) {
-    const organizationId = resolveOrgId(req);
     const result = CreateRoleSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
-    return this.rolesService.create(organizationId, result.data);
+    return this.rolesService.create(req.user.organizationId, result.data);
   }
 
   /** PATCH /api/v1/roles/:id — modifie label, description ou statut. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'roles.update', entity: 'Role' })
   @Patch(':id')
   update(
     @Req() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
-    const organizationId = resolveOrgId(req);
     const result = UpdateRoleSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
-    return this.rolesService.update(organizationId, id, result.data);
+    return this.rolesService.update(req.user.organizationId, id, result.data);
   }
 
   /** DELETE /api/v1/roles/:id — désactive (soft delete) un rôle. */
   @RequirePermission('permissions.delete')
+  @Auditable({ action: 'roles.delete', entity: 'Role' })
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
-    const organizationId = resolveOrgId(req);
-    await this.rolesService.remove(organizationId, id);
+    await this.rolesService.remove(req.user.organizationId, id);
   }
 
   /** POST /api/v1/roles/:id/permissions — ajoute des permissions au rôle. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'permissions.assign', entity: 'Role' })
   @Post(':id/permissions')
   addPermissions(
     @Req() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
-    const organizationId = resolveOrgId(req);
     const result = ManagePermissionsSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
-    return this.rolesService.addPermissions(organizationId, id, result.data.permissionIds);
+    return this.rolesService.addPermissions(req.user.organizationId, id, result.data.permissionIds);
   }
 
   /** DELETE /api/v1/roles/:id/permissions — retire des permissions du rôle. */
   @RequirePermission('permissions.edit')
+  @Auditable({ action: 'permissions.revoke', entity: 'Role' })
   @Delete(':id/permissions')
   @HttpCode(HttpStatus.OK)
   removePermissions(
@@ -139,12 +122,15 @@ export class RolesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
-    const organizationId = resolveOrgId(req);
     const result = ManagePermissionsSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
-    return this.rolesService.removePermissions(organizationId, id, result.data.permissionIds);
+    return this.rolesService.removePermissions(
+      req.user.organizationId,
+      id,
+      result.data.permissionIds,
+    );
   }
 
   /** POST /api/v1/roles/:id/users — assigne le rôle à un utilisateur. */
@@ -156,12 +142,11 @@ export class RolesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: unknown,
   ) {
-    const organizationId = resolveOrgId(req);
     const result = AssignRoleSchema.safeParse(body);
     if (!result.success) {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
-    await this.rolesService.assignRole(organizationId, id, result.data.userId);
+    await this.rolesService.assignRole(req.user.organizationId, id, result.data.userId);
   }
 
   /** DELETE /api/v1/roles/:id/users/:userId — révoque le rôle d'un utilisateur. */
@@ -173,7 +158,6 @@ export class RolesController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('userId', ParseUUIDPipe) userId: string,
   ) {
-    const organizationId = resolveOrgId(req);
-    await this.rolesService.revokeRole(organizationId, id, userId);
+    await this.rolesService.revokeRole(req.user.organizationId, id, userId);
   }
 }
