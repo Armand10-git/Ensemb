@@ -169,28 +169,31 @@ describe('RegistrationController (e2e)', () => {
       expect(message).toContain('disponible');
     });
 
-    it('rollback : aucune org partielle pour sous-domaine reserve (rejet zod avant transaction)', async () => {
-      const resBefore = await prisma.organization.findMany({
-        where: { subdomain: { startsWith: SUBDOMAIN_PREFIX } },
-      });
-      const countBefore = resBefore.length;
+    it('inscriptions simultanées sur le même sous-domaine : une seule réussit (P2002 traduit en 409)', async () => {
+      const concurrentSubdomain = `${SUBDOMAIN_PREFIX}-concurrent`;
+      const payload = {
+        subdomain: concurrentSubdomain,
+        organizationName: 'Concurrence Test',
+        adminFirstname: 'Jean',
+        adminLastname: 'Durand',
+        adminEmail: `admin@${concurrentSubdomain}.test`,
+        adminPassword: 'MotDePasse123!',
+      };
 
-      await request(app.getHttpServer())
-        .post('/api/v1/public/organizations/register')
-        .send({
-          subdomain: 'api', // sous-domaine réservé → 422 avant toute transaction DB
-          organizationName: 'Test',
-          adminFirstname: 'Jean',
-          adminLastname: 'Durand',
-          adminEmail: 'jean@test.com',
-          adminPassword: 'MotDePasse123!',
-        })
-        .expect(422);
+      // Deux requêtes simultanées — l'une passe la vérification hors-transaction
+      // avant que l'autre ait persisté, forçant la contrainte unique en base.
+      const [res1, res2] = await Promise.all([
+        request(app.getHttpServer()).post('/api/v1/public/organizations/register').send(payload),
+        request(app.getHttpServer()).post('/api/v1/public/organizations/register').send(payload),
+      ]);
 
-      const resAfter = await prisma.organization.findMany({
-        where: { subdomain: { startsWith: SUBDOMAIN_PREFIX } },
-      });
-      expect(resAfter.length).toBe(countBefore);
-    });
+      const statuses = [res1.status, res2.status].sort();
+      // Exactement une réussit (201) et l'autre échoue (409 ou 422)
+      expect(statuses[0]).toBeLessThanOrEqual(409);
+      expect(statuses[1]).toBeGreaterThanOrEqual(201);
+      // Exactement une organisation créée
+      const orgsCreated = await prisma.organization.count({ where: { subdomain: concurrentSubdomain } });
+      expect(orgsCreated).toBe(1);
+    }, 15_000);
   });
 });

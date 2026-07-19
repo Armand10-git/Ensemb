@@ -1,10 +1,11 @@
 import { ConflictException } from '@nestjs/common';
-import { RegistrationService } from '../registration.service';
+import { Prisma } from '@prisma/client';
+import { RegistrationService, computeTrialEndsAt } from '../registration.service';
 import { RESERVED_SUBDOMAINS } from '../dto/register-organization.dto';
 
-const ORG_ID = 'org-uuid';
-const USER_ID = 'user-uuid';
-const ROLE_ID = 'role-uuid';
+const ORG_ID = 'aaaaaaaa-0000-4000-a000-000000000001';
+const USER_ID = 'aaaaaaaa-0000-4000-a000-000000000002';
+const ROLE_ID = 'aaaaaaaa-0000-4000-a000-000000000003';
 
 const VALID_DTO = {
   subdomain: 'boutique-durand',
@@ -15,50 +16,58 @@ const VALID_DTO = {
   adminPassword: 'MotDePasse123',
 };
 
-const makePrisma = (overrides: Record<string, unknown> = {}) => ({
+const makeTx = () => ({
   organization: {
-    findUnique: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue({ id: ORG_ID, subdomain: VALID_DTO.subdomain }),
-    ...((overrides['organization'] as Record<string, unknown>) ?? {}),
   },
   permission: {
     findMany: jest.fn().mockResolvedValue([{ id: 'perm-1' }, { id: 'perm-2' }]),
-    ...((overrides['permission'] as Record<string, unknown>) ?? {}),
   },
   role: {
     create: jest.fn().mockResolvedValue({ id: ROLE_ID }),
-    ...((overrides['role'] as Record<string, unknown>) ?? {}),
   },
   user: {
     create: jest.fn().mockResolvedValue({ id: USER_ID }),
-    ...((overrides['user'] as Record<string, unknown>) ?? {}),
   },
   roleOnUser: {
     create: jest.fn().mockResolvedValue({}),
-    ...((overrides['roleOnUser'] as Record<string, unknown>) ?? {}),
   },
-  $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
-    const tx = {
-      organization: {
-        create: jest.fn().mockResolvedValue({ id: ORG_ID, subdomain: VALID_DTO.subdomain }),
-      },
-      permission: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'perm-1' }, { id: 'perm-2' }]),
-      },
-      role: {
-        create: jest.fn().mockResolvedValue({ id: ROLE_ID }),
-      },
-      user: {
-        create: jest.fn().mockResolvedValue({ id: USER_ID }),
-      },
-      roleOnUser: {
-        create: jest.fn().mockResolvedValue({}),
-      },
-    };
-    return fn(tx);
-  }),
-  ...overrides,
 });
+
+const makePrisma = (overrides: Record<string, unknown> = {}) => {
+  const tx = makeTx();
+  return {
+    organization: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      ...((overrides['organization'] as Record<string, unknown>) ?? {}),
+    },
+    $transaction: jest.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
+    ...overrides,
+    _tx: tx,
+  };
+};
+
+// ─── computeTrialEndsAt ────────────────────────────────────────────────────────
+
+describe('computeTrialEndsAt', () => {
+  it('retourne now + 30 jours par défaut', () => {
+    const now = new Date('2026-07-19T00:00:00Z');
+    const result = computeTrialEndsAt(now);
+    expect(result).toEqual(new Date('2026-08-18T00:00:00Z'));
+  });
+
+  it('respecte le paramètre trialDays', () => {
+    const now = new Date('2026-07-19T00:00:00Z');
+    expect(computeTrialEndsAt(now, 14)).toEqual(new Date('2026-08-02T00:00:00Z'));
+  });
+
+  it('retourne une date strictement dans le futur', () => {
+    const now = new Date();
+    expect(computeTrialEndsAt(now).getTime()).toBeGreaterThan(now.getTime());
+  });
+});
+
+// ─── RegistrationService.checkSubdomainAvailability ───────────────────────────
 
 describe('RegistrationService', () => {
   describe('checkSubdomainAvailability', () => {
@@ -81,62 +90,24 @@ describe('RegistrationService', () => {
       });
       const service = new RegistrationService(prisma as never);
 
-      const result = await service.checkSubdomainAvailability('boutique-durand');
-
-      expect(result).toEqual({ available: false });
+      expect(await service.checkSubdomainAvailability('boutique-durand')).toEqual({ available: false });
     });
 
     it.each(RESERVED_SUBDOMAINS)(
-      'retourne { available: false } pour le sous-domaine reserve "%s"',
+      'retourne { available: false } sans requête DB pour "%s"',
       async (reserved) => {
         const prisma = makePrisma();
         const service = new RegistrationService(prisma as never);
 
-        const result = await service.checkSubdomainAvailability(reserved);
-
-        expect(result).toEqual({ available: false });
-        // Ne doit pas interroger la base pour les sous-domaines réservés
+        expect(await service.checkSubdomainAvailability(reserved)).toEqual({ available: false });
         expect(prisma.organization.findUnique).not.toHaveBeenCalled();
       },
     );
   });
 
+  // ─── RegistrationService.register ─────────────────────────────────────────
+
   describe('register', () => {
-    it('calcule trialEndsAt a environ 30 jours dans le futur', async () => {
-      const prisma = makePrisma();
-      const service = new RegistrationService(prisma as never);
-      const before = Date.now();
-
-      await service.register(VALID_DTO);
-
-      const txMock = (prisma.$transaction as jest.Mock).mock.calls[0];
-      expect(txMock).toBeDefined();
-
-      // On vérifie via la création d'organisation dans la transaction
-      const txArg = (prisma.$transaction as jest.Mock).mock.calls[0][0];
-      expect(txArg).toBeInstanceOf(Function);
-
-      // Réexécuter la transaction avec un TX spy pour capturer trialEndsAt
-      const txSpy = {
-        organization: {
-          create: jest.fn().mockImplementation((args: { data: { trialEndsAt: Date } }) => {
-            const trialEndsAt = args.data.trialEndsAt;
-            const diff = trialEndsAt.getTime() - before;
-            const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-            expect(diff).toBeGreaterThanOrEqual(thirtyDaysMs - 1000);
-            expect(diff).toBeLessThanOrEqual(thirtyDaysMs + 5000);
-            return Promise.resolve({ id: ORG_ID, subdomain: VALID_DTO.subdomain });
-          }),
-        },
-        permission: { findMany: jest.fn().mockResolvedValue([]) },
-        role: { create: jest.fn().mockResolvedValue({ id: ROLE_ID }) },
-        user: { create: jest.fn().mockResolvedValue({ id: USER_ID }) },
-        roleOnUser: { create: jest.fn().mockResolvedValue({}) },
-      };
-
-      await txArg(txSpy);
-    });
-
     it('renvoie organizationId, subdomain et adminUserId', async () => {
       const prisma = makePrisma();
       const service = new RegistrationService(prisma as never);
@@ -150,31 +121,88 @@ describe('RegistrationService', () => {
       });
     });
 
-    it('lance ConflictException si le sous-domaine est deja pris', async () => {
+    it('crée l\'organisation avec trialEndsAt ≈ now + 30j', async () => {
+      const before = new Date();
+      const prisma = makePrisma();
+      const service = new RegistrationService(prisma as never);
+
+      await service.register(VALID_DTO);
+
+      const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
+      const callArg = (_tx.organization.create as jest.Mock).mock.calls[0][0] as {
+        data: { trialEndsAt: Date };
+      };
+      const trialEndsAt = callArg.data.trialEndsAt;
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+      const diff = trialEndsAt.getTime() - before.getTime();
+      expect(diff).toBeGreaterThanOrEqual(thirtyDaysMs - 1000);
+      expect(diff).toBeLessThanOrEqual(thirtyDaysMs + 5000);
+    });
+
+    it('assigne toutes les permissions du catalogue au rôle administrateur', async () => {
+      const prisma = makePrisma();
+      const service = new RegistrationService(prisma as never);
+
+      await service.register(VALID_DTO);
+
+      const { _tx } = prisma as unknown as { _tx: ReturnType<typeof makeTx> };
+      const roleCreate = (_tx.role.create as jest.Mock).mock.calls[0][0] as {
+        data: { permissions: { create: { permissionId: string }[] } };
+      };
+      expect(roleCreate.data.permissions.create).toEqual([
+        { permissionId: 'perm-1' },
+        { permissionId: 'perm-2' },
+      ]);
+    });
+
+    it('lance ConflictException si le sous-domaine est déjà pris (check applicatif)', async () => {
       const prisma = makePrisma({
         organization: { findUnique: jest.fn().mockResolvedValue({ id: ORG_ID }) },
       });
       const service = new RegistrationService(prisma as never);
 
       await expect(service.register(VALID_DTO)).rejects.toBeInstanceOf(ConflictException);
-      // Ne doit pas démarrer de transaction si le sous-domaine est indisponible
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('le message d\'erreur ne revele pas l\'existence de l\'organisation (anti-enumeration)', async () => {
+    it('traduit P2002 en ConflictException (race condition entre check et création)', async () => {
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '5.0.0',
+      });
+      const prisma = makePrisma({
+        $transaction: jest.fn().mockRejectedValue(p2002),
+      });
+      const service = new RegistrationService(prisma as never);
+
+      const err = await service.register(VALID_DTO).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).message).toContain('disponible');
+      expect((err as ConflictException).message).not.toContain('existe');
+    });
+
+    it('propage les erreurs non-P2002 sans les masquer', async () => {
+      const dbError = new Error('connexion perdue');
+      const prisma = makePrisma({
+        $transaction: jest.fn().mockRejectedValue(dbError),
+      });
+      const service = new RegistrationService(prisma as never);
+
+      await expect(service.register(VALID_DTO)).rejects.toBe(dbError);
+    });
+
+    it('le message ConflictException est neutre (anti-énumération)', async () => {
       const prisma = makePrisma({
         organization: { findUnique: jest.fn().mockResolvedValue({ id: ORG_ID }) },
       });
       const service = new RegistrationService(prisma as never);
 
-      try {
-        await service.register(VALID_DTO);
-        fail('Doit lancer une exception');
-      } catch (e) {
-        expect((e as ConflictException).message).not.toContain('existe');
-        expect((e as ConflictException).message).not.toContain('organisation');
-        expect((e as ConflictException).message).toContain('disponible');
-      }
+      const err = await service.register(VALID_DTO).catch((e: unknown) => e);
+      const msg = (err as ConflictException).message;
+      expect(msg).not.toContain('existe');
+      expect(msg).not.toContain('organisation');
+      expect(msg).toContain('disponible');
     });
   });
 });
