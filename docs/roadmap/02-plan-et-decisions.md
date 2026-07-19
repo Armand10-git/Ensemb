@@ -14,29 +14,30 @@
 ## 13. Roadmap détaillée par phases (P0–P14)
 
 ### P0 — Bootstrap du monorepo & socle DevOps
-- [ ] Init Turborepo (`pnpm dlx create-turbo@latest`), workspaces `apps/*` + `packages/*`
-- [ ] `packages/config` : `tsconfig.base.json`, config ESLint/Prettier partagée, `tailwind.config.ts` avec la palette verte par défaut de la plateforme (§3)
-- [ ] `packages/database` : init Prisma
-- [ ] `docker-compose.yml` racine (Postgres + Redis) pour le développement local (§12.1)
-- [ ] `Dockerfile` multi-stage pour `apps/api` et `apps/web` (§12.1)
-- [ ] Pipeline CI (`.github/workflows/ci.yml`) : lint + typecheck + test + build sur chaque PR, cache Turborepo distant (§12.2)
-- [ ] Conventional Commits + `commitlint`/`husky`, branches protégées sur `main` (§12.6)
+- [x] Init Turborepo (`pnpm dlx create-turbo@latest`), workspaces `apps/*` + `packages/*` — S01 ✅
+- [x] `packages/config` : `tsconfig.base.json`, config ESLint/Prettier partagée, `tailwind.config.ts` avec la palette verte par défaut de la plateforme (§3) — S01 ✅
+- [x] `packages/database` : init Prisma — S01 ✅
+- [x] `docker-compose.yml` racine (Postgres + Redis) pour le développement local (§12.1) — S02 ✅
+- [x] `Dockerfile` multi-stage pour `apps/api` et `apps/web` (§12.1) — S02 ✅
+- [x] Pipeline CI (`.github/workflows/ci.yml`) : lint + typecheck + test + build sur chaque PR, cache Turborepo distant (§12.2) — S03 ✅ (dette : protection `main` + lint-staged/prettier à finaliser)
+- [x] Conventional Commits + `commitlint`/`husky`, branches protégées sur `main` (§12.6) — S03 ✅
 
 ### P1 — Socle backend & multi-tenance
-- [ ] Schéma `Organization` + `PlatformAdmin` (§4), migration initiale — fondation dont dépend tout le reste, y compris `User`
-- [ ] `TenancyModule` : middleware de résolution de tenant par sous-domaine, contexte de requête, extension Prisma d'auto-scoping par `organizationId` (§5, §17 point A)
-- [ ] Row-Level Security PostgreSQL en défense en profondeur (§4)
-- [ ] `AuthModule` : login JWT (access 15 min + refresh 7 j en base), guard `isActive`, scoping par organisation
-- [ ] `RolesModule` + `PermissionGuard` + décorateur `@RequirePermission()`
-- [ ] Préfixe global d'API `/api/v1` (§17, point AA) + `AuditModule` (modèle `AuditLog` + interceptor global, §17 point U) — posés dès le socle pour couvrir tous les modules suivants
-- [ ] `QueueModule` (connexion Redis/BullMQ) et `RealtimeModule` (Gateway Socket.io minimal, rooms scopées par organisation)
-- [ ] Interceptor `records.viewAll` générique
-- [ ] Flow d'inscription (§18) : création `Organization` + premier utilisateur admin + validation de disponibilité du sous-domaine
+- [x] Schéma `Organization` + `PlatformAdmin` (§4), migration initiale — fondation dont dépend tout le reste, y compris `User` — T01 ✅
+- [x] `TenancyModule` : middleware de résolution de tenant par sous-domaine, contexte de requête, extension Prisma d'auto-scoping par `organizationId` (§5, §17 point A) — T02 ✅
+- [x] Row-Level Security PostgreSQL en défense en profondeur (§4) — T03 ✅
+- [x] `AuthModule` : login JWT (access 15 min + refresh 7 j en base), guard `isActive`, scoping par organisation — S06 ✅
+- [x] `RolesModule` + `PermissionGuard` + décorateur `@RequirePermission()` — S07 ✅
+- [x] Préfixe global d'API `/api/v1` (§17, point AA) + `AuditModule` (modèle `AuditLog` + interceptor global, §17 point U) — S08b ✅
+- [x] `RealtimeModule` (Gateway Socket.io minimal, rooms scopées par organisation) — S08 ✅
+- [ ] `QueueModule` (connexion Redis/BullMQ, workers dédiés — §17 point Z) — à venir (S16+)
+- [x] Interceptor `records.viewAll` générique — S07 ✅
+- [x] Flow d'inscription (§18) : création `Organization` + premier utilisateur admin + validation de disponibilité du sous-domaine — T04 ✅
 
 ### P2 — Modèle de données
-- [ ] Schéma Prisma complet (§4), migration initiale — chaque modèle créé à partir d'ici inclut `organizationId` dès sa création, jamais en rattrapage
-- [ ] Index composites `(organizationId, …)` et index uniques partiels (`WHERE deleted_at IS NULL`) posés dans la migration initiale (§4) ; table `DocumentCounter` pour la génération transactionnelle des références de documents (§17, point X)
-- [ ] Seed : catalogue des permissions (global), rôle admin complet, utilisateur admin, client "walk-in", devise et entrepôt par défaut, **par organisation de démonstration**
+- [x] Schéma Prisma `User`, `Role`, `Permission`, `RoleOnUser`, `PermissionOnRole`, `AuditLog` (§4) + migrations — S04 ✅ (schéma complet métier à compléter en Bloc C+)
+- [ ] Index composites `(organizationId, …)` et index uniques partiels (`WHERE deleted_at IS NULL`) posés dans la migration initiale (§4) ; table `DocumentCounter` pour la génération transactionnelle des références de documents (§17, point X) — S15b
+- [x] Seed : catalogue des permissions (108 droits), rôle Administrateur complet, utilisateur admin — S05 ✅ (client "walk-in", devise et entrepôt par défaut : S09+)
 
 ### P3 — Référentiels
 - [ ] `CatalogModule` (catégories, marques, unités + conversion, devises) + écrans web correspondants
