@@ -6,6 +6,7 @@ import { RedisModule } from './common/redis.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { RolesModule } from './modules/roles/roles.module';
     HealthModule,
     AuthModule,
     RolesModule,
+    RealtimeModule,
   ],
 })
 export class AppModule {}
