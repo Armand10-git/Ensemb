@@ -10,7 +10,10 @@ import {
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma.service';
+import type { PaginatedResult } from '../../common/types';
 import type { BackupExport, ExportFormat } from '@prisma/client';
+
+export type { PaginatedResult };
 
 export interface BackupJobData {
   exportId: string;
@@ -26,13 +29,6 @@ export interface BackupExportSummary {
   sizeBytes: number | null;
   requestedAt: Date;
   completedAt: Date | null;
-}
-
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 /**
@@ -53,12 +49,6 @@ export class BackupService {
     @InjectQueue('backup') private readonly backupQueue: Queue<BackupJobData>,
   ) {}
 
-  /**
-   * Crée un BackupExport en statut PENDING et enfile le job export.generate.
-   * @param organizationId - Tenant propriétaire de l'export (depuis req.user).
-   * @param format - Format de sortie CSV ou JSON.
-   * @returns L'identifiant du BackupExport créé.
-   */
   async requestExport(
     organizationId: string,
     format: ExportFormat,
@@ -77,11 +67,6 @@ export class BackupService {
     return { exportId: backupExport.id };
   }
 
-  /**
-   * Liste les exports de l'organisation avec pagination, triés par date décroissante.
-   * errorMessage n'est jamais inclus dans le résultat.
-   * @param organizationId - Tenant à filtrer (depuis req.user).
-   */
   async listExports(
     organizationId: string,
     page: number,
@@ -112,27 +97,11 @@ export class BackupService {
     return { data: exports, total, page, limit };
   }
 
-  /**
-   * Résout un ReadStream vers le fichier export après vérification d'ownership et de statut.
-   * Ne retourne jamais le chemin absolu côté client.
-   * @param exportId - Identifiant du BackupExport.
-   * @param organizationId - Tenant attendu (depuis req.user) — vérifié contre la BDD (anti-IDOR).
-   */
   async getDownloadStream(
     exportId: string,
     organizationId: string,
   ): Promise<{ stream: fs.ReadStream; filename: string; mimeType: string }> {
-    const backupExport = await this.prisma.backupExport.findUnique({
-      where: { id: exportId },
-    });
-
-    if (!backupExport) {
-      throw new NotFoundException("Export introuvable.");
-    }
-
-    if (backupExport.organizationId !== organizationId) {
-      throw new ForbiddenException("Accès non autorisé à cet export.");
-    }
+    const backupExport = await this.assertOwnership(exportId, organizationId);
 
     if (backupExport.status !== 'COMPLETED') {
       throw new BadRequestException("Cet export n'est pas encore disponible.");
@@ -148,8 +117,7 @@ export class BackupService {
       throw new BadRequestException("Fichier export introuvable sur le serveur.");
     }
 
-    const mimeType =
-      backupExport.format === 'CSV' ? 'text/csv' : 'application/json';
+    const mimeType = backupExport.format === 'CSV' ? 'text/csv' : 'application/json';
 
     return {
       stream: fs.createReadStream(filePath),
@@ -158,31 +126,17 @@ export class BackupService {
     };
   }
 
-  /**
-   * Supprime un export : fichier physique d'abord, puis ligne en base.
-   * Si la suppression du fichier échoue, la ligne n'est pas supprimée (atomicité partielle).
-   * @param exportId - Identifiant du BackupExport.
-   * @param organizationId - Tenant attendu (depuis req.user) — vérifié (anti-IDOR).
-   */
   async deleteExport(exportId: string, organizationId: string): Promise<void> {
-    const backupExport = await this.prisma.backupExport.findUnique({
-      where: { id: exportId },
-    });
-
-    if (!backupExport) {
-      throw new NotFoundException("Export introuvable.");
-    }
-
-    if (backupExport.organizationId !== organizationId) {
-      throw new ForbiddenException("Accès non autorisé à cet export.");
-    }
+    const backupExport = await this.assertOwnership(exportId, organizationId);
 
     // Suppression fichier physique d'abord — si échec, pas de suppression BDD (cohérence)
     if (backupExport.filename) {
       const filePath = this.buildFilePath(organizationId, exportId, backupExport.format);
-      if (fs.existsSync(filePath)) {
+      try {
         fs.unlinkSync(filePath);
         this.logger.log(`Fichier supprimé : ${filePath}`);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
     }
 
@@ -190,16 +144,7 @@ export class BackupService {
     this.logger.log(`BackupExport ${exportId} supprimé pour org ${organizationId}`);
   }
 
-  /**
-   * Supprime les exports COMPLETED ou FAILED plus anciens que retentionDays.
-   * Appelé par le job BullMQ export.purge (quotidien).
-   * @param organizationId - Tenant à purger.
-   * @param retentionDays - Nombre de jours de rétention (défaut : 30).
-   */
-  async purgeOldExports(
-    organizationId: string,
-    retentionDays = 30,
-  ): Promise<void> {
+  async purgeOldExports(organizationId: string, retentionDays = 30): Promise<void> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - retentionDays);
 
@@ -211,20 +156,22 @@ export class BackupService {
       },
     });
 
-    for (const exp of oldExports) {
-      if (exp.filename) {
-        const filePath = this.buildFilePath(organizationId, exp.id, exp.format);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-      }
-    }
+    await Promise.all(
+      oldExports
+        .filter((exp) => exp.filename !== null)
+        .map(async (exp) => {
+          const filePath = this.buildFilePath(organizationId, exp.id, exp.format);
+          try {
+            fs.unlinkSync(filePath);
+          } catch (err: unknown) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          }
+        }),
+    );
 
     const ids = oldExports.map((e) => e.id);
     if (ids.length > 0) {
-      await this.prisma.backupExport.deleteMany({
-        where: { id: { in: ids } },
-      });
+      await this.prisma.backupExport.deleteMany({ where: { id: { in: ids } } });
       this.logger.log(
         `Purge : ${ids.length} export(s) supprimé(s) pour org ${organizationId} (rétention ${retentionDays}j)`,
       );
@@ -233,10 +180,21 @@ export class BackupService {
 
   /**
    * Construit le chemin absolu du fichier export.
-   * TODO T09-debt: migrer vers S3-compatible (S13, §17 point Y).
+   * @internal Exposé pour BackupWorker uniquement — TODO T09-debt: migrer vers S3-compatible (S13, §17 point Y).
    */
   buildFilePath(organizationId: string, exportId: string, format: ExportFormat): string {
     const ext = format === 'CSV' ? 'csv' : 'json';
     return path.join(process.cwd(), 'storage', 'exports', organizationId, `${exportId}.${ext}`);
+  }
+
+  /** Vérifie l'existence et l'ownership d'un export — lève 404 ou 403 selon le cas. */
+  private async assertOwnership(exportId: string, organizationId: string): Promise<BackupExport> {
+    const backupExport = await this.prisma.backupExport.findUnique({ where: { id: exportId } });
+
+    if (!backupExport) throw new NotFoundException('Export introuvable.');
+    if (backupExport.organizationId !== organizationId)
+      throw new ForbiddenException('Accès non autorisé à cet export.');
+
+    return backupExport;
   }
 }

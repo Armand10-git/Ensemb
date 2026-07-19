@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Post,
   Query,
@@ -30,20 +31,14 @@ import type { PaginatedResult, BackupExportSummary } from './backup.service';
 @UseGuards(JwtAuthGuard, PermissionGuard)
 @RequirePermission('backup.manage')
 export class BackupController {
+  private readonly logger = new Logger(BackupController.name);
+
   constructor(private readonly backupService: BackupService) {}
 
-  /**
-   * POST /api/v1/backup/exports
-   * Demande la génération d'un export CSV ou JSON en arrière-plan.
-   * Répond 201 avec { exportId }.
-   */
   @Post('exports')
   @HttpCode(HttpStatus.CREATED)
   @Auditable({ action: 'BACKUP_EXPORT_REQUESTED', entity: 'BackupExport' })
-  async requestExport(
-    @Req() req: AuthenticatedRequest,
-    @Res({ passthrough: true }) _res: Response,
-  ): Promise<{ exportId: string }> {
+  async requestExport(@Req() req: AuthenticatedRequest): Promise<{ exportId: string }> {
     const body: unknown = (req as { body?: unknown }).body;
     const result = RequestExportSchema.safeParse(body ?? {});
     if (!result.success) {
@@ -54,11 +49,6 @@ export class BackupController {
     return this.backupService.requestExport(organizationId, result.data.format);
   }
 
-  /**
-   * GET /api/v1/backup/exports
-   * Liste les exports de l'organisation avec pagination.
-   * Répond 200 avec PaginatedResult<BackupExportSummary>.
-   */
   @Get('exports')
   async listExports(
     @Req() req: AuthenticatedRequest,
@@ -71,11 +61,6 @@ export class BackupController {
     return this.backupService.listExports(organizationId, pageNum, limitNum);
   }
 
-  /**
-   * GET /api/v1/backup/exports/:id/download
-   * Télécharge le fichier export via un ReadStream.
-   * Ne retourne jamais le chemin absolu côté client.
-   */
   @Get('exports/:id/download')
   async downloadExport(
     @Param('id') exportId: string,
@@ -90,13 +75,16 @@ export class BackupController {
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    stream.on('error', (err) => {
+      this.logger.error(`Erreur lecture stream export ${exportId}`, err);
+      if (!res.headersSent) res.status(500).end();
+      else res.destroy();
+    });
+
     stream.pipe(res);
   }
 
-  /**
-   * DELETE /api/v1/backup/exports/:id
-   * Supprime un export (fichier physique + ligne BDD). Répond 204.
-   */
   @Delete('exports/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteExport(

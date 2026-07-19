@@ -50,11 +50,6 @@ export class BackupWorker extends WorkerHost {
     }
   }
 
-  /**
-   * Génère le fichier CSV ou JSON pour un export donné.
-   * Passe le statut PENDING → PROCESSING → COMPLETED (ou FAILED).
-   * Émet backup:completed via Socket.io vers la room de l'organisation.
-   */
   private async handleGenerate(data: BackupJobData): Promise<void> {
     const { exportId, organizationId, format } = data;
 
@@ -93,65 +88,29 @@ export class BackupWorker extends WorkerHost {
       const filename = `export-${exportId}.${ext}`;
       const filePath = this.backupService.buildFilePath(organizationId, exportId, format);
 
-      // Crée le répertoire si nécessaire — TODO T09-debt: migrer vers S3-compatible (S13, §17 point Y)
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+      // TODO T09-debt: migrer vers S3-compatible (S13, §17 point Y)
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
       let content: string;
       if (format === 'CSV') {
-        // Sérialiser chaque entité séparément avec header — sections séparées par une ligne vide
-        const firstUser = users[0];
-        const firstRole = roles[0];
-        const firstAssignment = roleAssignments[0];
-
-        const usersSection =
-          firstUser !== undefined
-            ? stringify(users, { header: true, columns: Object.keys(firstUser) })
-            : 'users: (vide)\n';
-        const rolesSection =
-          firstRole !== undefined
-            ? stringify(roles, { header: true, columns: Object.keys(firstRole) })
-            : 'roles: (vide)\n';
-        const roleAssignmentsSection =
-          firstAssignment !== undefined
-            ? stringify(roleAssignments, {
-                header: true,
-                columns: Object.keys(firstAssignment),
-              })
-            : 'roleAssignments: (vide)\n';
-
-        content = [
-          '# users',
-          usersSection,
-          '# roles',
-          rolesSection,
-          '# roleAssignments',
-          roleAssignmentsSection,
-        ].join('\n');
+        content = this.serializeToCSV(users, roles, roleAssignments);
       } else {
         content = JSON.stringify(exportData, null, 2);
       }
 
+      const sizeBytes = Buffer.byteLength(content, 'utf-8');
       fs.writeFileSync(filePath, content, 'utf-8');
-      const stats = fs.statSync(filePath);
 
       await this.prisma.backupExport.update({
         where: { id: exportId },
-        data: {
-          status: 'COMPLETED',
-          filename,
-          sizeBytes: stats.size,
-          completedAt: new Date(),
-        },
+        data: { status: 'COMPLETED', filename, sizeBytes, completedAt: new Date() },
       });
 
       this.realtimeGateway.server
         ?.to(`org:${organizationId}`)
-        .emit('backup:completed', { exportId, filename, size: stats.size });
+        .emit('backup:completed', { exportId, filename, size: sizeBytes });
 
-      this.logger.log(`Export ${exportId} complété pour org ${organizationId} (${stats.size} octets)`);
+      this.logger.log(`Export ${exportId} complété pour org ${organizationId} (${sizeBytes} octets)`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       this.logger.error(`Erreur génération export ${exportId} pour org ${organizationId}`, err);
@@ -160,14 +119,10 @@ export class BackupWorker extends WorkerHost {
         where: { id: exportId },
         data: { status: 'FAILED', errorMessage },
       });
-      // Ne pas relancer : le statut FAILED est définitif, l'utilisateur peut redemander un export
+      // Ne pas relancer : FAILED est définitif, l'utilisateur peut redemander un export
     }
   }
 
-  /**
-   * Purge les exports expirés pour toutes les organisations actives.
-   * Planifié quotidiennement par BullMQ repeat.
-   */
   private async handlePurge(data: BackupJobData): Promise<void> {
     const { organizationId } = data;
 
@@ -177,5 +132,27 @@ export class BackupWorker extends WorkerHost {
       this.logger.error(`Erreur purge exports pour org ${organizationId}`, err);
       throw err;
     }
+  }
+
+  /** Sérialise les trois entités en sections CSV séparées. Chaque section a sa propre ligne d'en-tête. */
+  private serializeToCSV(
+    users: object[],
+    roles: object[],
+    roleAssignments: object[],
+  ): string {
+    const section = (label: string, rows: object[]): string => {
+      const first = rows[0];
+      const csv =
+        first !== undefined
+          ? stringify(rows, { header: true, columns: Object.keys(first) })
+          : `${label}: (vide)\n`;
+      return `# ${label}\n${csv}`;
+    };
+
+    return [
+      section('users', users),
+      section('roles', roles),
+      section('roleAssignments', roleAssignments),
+    ].join('\n');
   }
 }

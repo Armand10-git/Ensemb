@@ -3,7 +3,6 @@ import * as nodePath from 'path';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
-import type { Queue } from 'bullmq';
 import { BackupService } from '../backup.service';
 import { PrismaService } from '../../../common/prisma.service';
 
@@ -34,13 +33,25 @@ const makeExport = (overrides: Partial<{
   ...overrides,
 });
 
+type PrismaMock = {
+  backupExport: {
+    create: jest.Mock;
+    findUnique: jest.Mock;
+    findMany: jest.Mock;
+    count: jest.Mock;
+    delete: jest.Mock;
+    deleteMany: jest.Mock;
+    update: jest.Mock;
+  };
+};
+
 describe('BackupService', () => {
   let service: BackupService;
-  let prisma: jest.Mocked<PrismaService>;
-  let backupQueue: jest.Mocked<Queue>;
+  let prisma: PrismaMock;
+  let backupQueue: { add: jest.Mock };
 
   beforeEach(async () => {
-    const prismaMock = {
+    const prismaMock: PrismaMock = {
       backupExport: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -63,15 +74,15 @@ describe('BackupService', () => {
     }).compile();
 
     service = moduleRef.get(BackupService);
-    prisma = moduleRef.get(PrismaService) as jest.Mocked<PrismaService>;
-    backupQueue = moduleRef.get(getQueueToken('backup')) as jest.Mocked<Queue>;
+    prisma = moduleRef.get(PrismaService) as unknown as PrismaMock;
+    backupQueue = moduleRef.get(getQueueToken('backup')) as { add: jest.Mock };
   });
 
   describe('requestExport', () => {
     it('crée un BackupExport PENDING et enfile le job', async () => {
       const created = makeExport({ status: 'PENDING', completedAt: null });
-      (prisma.backupExport.create as jest.Mock).mockResolvedValue(created);
-      (backupQueue.add as jest.Mock).mockResolvedValue(undefined);
+      prisma.backupExport.create.mockResolvedValue(created);
+      backupQueue.add.mockResolvedValue(undefined);
 
       const result = await service.requestExport(ORG_A, 'CSV');
 
@@ -92,8 +103,8 @@ describe('BackupService', () => {
       // Le select Prisma exclut errorMessage — le mock doit refléter ce que Prisma retournerait réellement
       const { errorMessage, organizationId, ...orgAExportSummary } = makeExport();
       void errorMessage; void organizationId;
-      (prisma.backupExport.count as jest.Mock).mockResolvedValue(1);
-      (prisma.backupExport.findMany as jest.Mock).mockResolvedValue([orgAExportSummary]);
+      prisma.backupExport.count.mockResolvedValue(1);
+      prisma.backupExport.findMany.mockResolvedValue([orgAExportSummary]);
 
       const result = await service.listExports(ORG_A, 1, 20);
 
@@ -111,7 +122,7 @@ describe('BackupService', () => {
 
   describe('getDownloadStream', () => {
     it("lève ForbiddenException si l'exportId appartient à une autre org", async () => {
-      (prisma.backupExport.findUnique as jest.Mock).mockResolvedValue(
+      prisma.backupExport.findUnique.mockResolvedValue(
         makeExport({ organizationId: ORG_B }),
       );
 
@@ -121,7 +132,7 @@ describe('BackupService', () => {
     });
 
     it('lève BadRequestException si status !== COMPLETED', async () => {
-      (prisma.backupExport.findUnique as jest.Mock).mockResolvedValue(
+      prisma.backupExport.findUnique.mockResolvedValue(
         makeExport({ status: 'PENDING' }),
       );
 
@@ -132,7 +143,7 @@ describe('BackupService', () => {
 
     it('retourne un ReadStream pour un export COMPLETED valide', async () => {
       const exp = makeExport();
-      (prisma.backupExport.findUnique as jest.Mock).mockResolvedValue(exp);
+      prisma.backupExport.findUnique.mockResolvedValue(exp);
 
       const filePath = service.buildFilePath(ORG_A, EXPORT_ID, 'CSV');
       const dir = nodePath.dirname(filePath);
@@ -154,7 +165,7 @@ describe('BackupService', () => {
 
   describe('deleteExport', () => {
     it("lève ForbiddenException si l'exportId appartient à une autre org", async () => {
-      (prisma.backupExport.findUnique as jest.Mock).mockResolvedValue(
+      prisma.backupExport.findUnique.mockResolvedValue(
         makeExport({ organizationId: ORG_B }),
       );
 
@@ -162,7 +173,7 @@ describe('BackupService', () => {
     });
 
     it('lève NotFoundException si inexistant', async () => {
-      (prisma.backupExport.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.backupExport.findUnique.mockResolvedValue(null);
 
       await expect(service.deleteExport(EXPORT_ID, ORG_A)).rejects.toThrow(NotFoundException);
     });
@@ -176,8 +187,8 @@ describe('BackupService', () => {
         requestedAt: new Date('2025-01-01T00:00:00Z'),
         filename: null,
       });
-      (prisma.backupExport.findMany as jest.Mock).mockResolvedValue([old]);
-      (prisma.backupExport.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+      prisma.backupExport.findMany.mockResolvedValue([old]);
+      prisma.backupExport.deleteMany.mockResolvedValue({ count: 1 });
 
       await service.purgeOldExports(ORG_A, 30);
 
@@ -187,7 +198,7 @@ describe('BackupService', () => {
     });
 
     it('ne supprime rien si aucun export expiré', async () => {
-      (prisma.backupExport.findMany as jest.Mock).mockResolvedValue([]);
+      prisma.backupExport.findMany.mockResolvedValue([]);
 
       await service.purgeOldExports(ORG_A, 30);
 
