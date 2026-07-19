@@ -162,6 +162,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
 
   // Système & organisation
   { name: 'backup.access', label: 'Accéder aux sauvegardes' },
+  { name: 'backup.manage', label: 'Gérer les exports de données (T09)' },
   { name: 'settings.system', label: 'Modifier les réglages système' },
   { name: 'organization.branding.edit', label: 'Modifier le branding (logo/couleurs)' },
   { name: 'billing.view', label: 'Voir la facturation' },

@@ -16,13 +16,14 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { BillingModule } from './modules/billing/billing.module';
 import { SmtpModule } from './modules/smtp/smtp.module';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module';
+import { BackupModule } from './modules/backup/backup.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     // Rate limiting global : 20 req/min par IP par défaut ; routes spécifiques via @Throttle()
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
-    // Connexion BullMQ globale — partagée par toutes les queues (billing, etc.)
+    // Connexion BullMQ globale — partagée par toutes les queues (billing, backup, etc.)
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -43,6 +44,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     BillingModule,
     SmtpModule,
     PlatformAdminModule,
+    BackupModule,
   ],
 })
 export class AppModule {}
