@@ -90,12 +90,16 @@ export class AuditInterceptor implements NestInterceptor {
 
 /**
  * Extrait l'id UUID d'une ressource depuis le corps de la réponse.
+ * Inspecte en priorité `id`, puis les champs `*Id` courants pour les endpoints
+ * de création qui ne renvoient pas de champ `id` canonique (ex. register → organizationId).
  * Valide le format UUID pour ne pas persister un id malformé.
  */
 function extractEntityId(body: unknown): string | undefined {
-  if (body !== null && typeof body === 'object' && 'id' in body) {
-    const id = (body as Record<string, unknown>)['id'];
-    if (typeof id === 'string' && UUID_REGEX.test(id)) return id;
+  if (body === null || typeof body !== 'object') return undefined;
+  const obj = body as Record<string, unknown>;
+  for (const key of ['id', 'organizationId', 'userId', 'roleId']) {
+    const val = obj[key];
+    if (typeof val === 'string' && UUID_REGEX.test(val)) return val;
   }
   return undefined;
 }

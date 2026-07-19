@@ -209,6 +209,21 @@ describe('AuditInterceptor', () => {
     expect(auditService.create).not.toHaveBeenCalled();
   });
 
+  it('extrait entityId depuis organizationId quand id est absent (endpoint register)', async () => {
+    jest.spyOn(reflector, 'get').mockReturnValue({ action: 'ORGANIZATION_REGISTER', entity: 'organization' });
+    const responseBody = { organizationId: ORG_UUID, subdomain: 'test', adminUserId: USER_UUID };
+
+    await new Promise<void>((resolve) => {
+      interceptor.intercept(makeContext(undefined), makeCallHandler(responseBody)).subscribe({
+        complete: resolve,
+      });
+    });
+    await flush();
+
+    const call = auditService.create.mock.calls[0]?.[0];
+    expect(call?.entityId).toBe(ORG_UUID);
+  });
+
   it('ignore un paramId non-UUID (pas de fetchEntitySnapshot)', async () => {
     jest.spyOn(reflector, 'get').mockReturnValue({ action: 'roles.update', entity: 'Role' });
 
