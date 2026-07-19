@@ -26,9 +26,14 @@ model Organization {
   logoUrl      String?
   /// Couleur principale HSL/hex appliquée au runtime (design system §3)
   primaryColor String?
-  status       OrganizationStatus @default(TRIALING)
-  createdAt    DateTime           @default(now())
-  deletedAt    DateTime?
+  status            OrganizationStatus @default(TRIALING)
+  /// Date de fin d'essai calculée à l'inscription. Null pour les orgs antérieures à T04.
+  /// Logique fenêtre de lancement différée à T06 (PlatformSetting.launchPromoEndsAt).
+  trialEndsAt       DateTime?
+  /// Raison d'une fin d'essai anticipée (ex. dépassement CA). Alimenté par billing-queue (T06/T07).
+  trialEndedReason  String?
+  createdAt         DateTime           @default(now())
+  deletedAt         DateTime?
 
   users User[]
   roles Role[]
