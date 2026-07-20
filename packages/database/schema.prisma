@@ -197,6 +197,8 @@ model Organization {
   brands        Brand[]
   units         Unit[]
   products      Product[]
+  clients       Client[]
+  providers     Provider[]
 
   @@map("organizations")
 }
@@ -500,4 +502,54 @@ model Unit {
   updatedAt      DateTime  @updatedAt
 
   @@map("units")
+}
+
+// ─── Partenaires tenant ───────────────────────────────────────────────────────
+
+/// Client d'un tenant (S12 — Bloc C).
+/// code : entier séquentiel par organisation, généré en transaction SERIALIZABLE.
+/// Soft delete : index uniques partiels (organizationId, name) et (organizationId, code)
+/// créés en SQL raw dans la migration (WHERE deleted_at IS NULL).
+/// Le client "Walk-in" (code=1) est le client anonyme du POS — seedé automatiquement.
+model Client {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  /// Code séquentiel par organisation — généré transactionnellement, jamais saisi par l'utilisateur
+  code           Int
+  email          String?
+  phone          String?
+  country        String?
+  city           String?
+  address        String?
+  deletedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  /// Contrainte de sécurité : le filet final en cas de collision concurrente sur le code
+  @@unique([organizationId, code])
+  @@map("clients")
+}
+
+/// Fournisseur d'un tenant (S12 — Bloc C).
+/// Même structure que Client — code séquentiel distinct par organisation.
+model Provider {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  /// Code séquentiel par organisation — généré transactionnellement, jamais saisi par l'utilisateur
+  code           Int
+  email          String?
+  phone          String?
+  country        String?
+  city           String?
+  address        String?
+  deletedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, code])
+  @@map("providers")
 }

@@ -407,6 +407,19 @@ async function main(): Promise<void> {
   });
   console.log('✔  Unité "Centilitre" (= Litre ÷ 100)');
 
+  // 10. Client "Walk-in" (client anonyme du POS, code=1, idempotent)
+  const walkIn = await prisma.client.findFirst({
+    where: { organizationId: org.id, code: 1, deletedAt: null },
+  });
+  if (!walkIn) {
+    await prisma.client.create({
+      data: { organizationId: org.id, name: 'Walk-in', code: 1 },
+    });
+    console.log('✔  Client "Walk-in" (code: 1) créé pour l\'organisation démo');
+  } else {
+    console.log('✔  Client "Walk-in" déjà présent (idempotent)');
+  }
+
   console.log('🎉 Seed terminé avec succès.');
 }
 
