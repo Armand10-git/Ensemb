@@ -7,6 +7,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Référentiels globaux ─────────────────────────────────────────────────────
+
+enum CurrencySymbolPosition {
+  BEFORE
+  AFTER
+}
+
+/// Devise globale de plateforme (partagée entre tous les tenants).
+/// Seul un PlatformAdmin peut créer/modifier/désactiver une devise.
+/// Un tenant choisit sa devise par défaut via Organization.defaultCurrencyId.
+model Currency {
+  id             String                 @id @default(uuid()) @db.Uuid
+  /// Code ISO 4217 : "XAF", "EUR", "USD"
+  code           String                 @unique
+  /// Libellé complet : "Franc CFA BEAC", "Euro"
+  name           String
+  /// Symbole affiché : "XAF", "€", "$"
+  symbol         String
+  /// Position du symbole : BEFORE = "$ 5 000", AFTER = "5 000 XAF"
+  symbolPosition CurrencySymbolPosition @default(AFTER)
+  /// Nombre de décimales affichées (0 pour XAF)
+  decimalPlaces  Int                    @default(0)
+  /// false = devise masquée dans l'UI (soft-disable)
+  isActive       Boolean                @default(true)
+  organizations  Organization[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@map("currencies")
+}
+
 // ─── Tenants & plateforme ────────────────────────────────────────────────────
 
 enum OrganizationStatus {
@@ -149,7 +180,10 @@ model Organization {
   trialEndsAt       DateTime?
   /// Raison d'une fin d'essai anticipée (ex. dépassement CA). Alimenté par billing-queue (T06/T07).
   trialEndedReason  String?
-  createdAt         DateTime           @default(now())
+  /// Devise par défaut choisie par l'organisation (lecture seule pour les tenants non-admin).
+  defaultCurrencyId String?   @db.Uuid
+  defaultCurrency   Currency? @relation(fields: [defaultCurrencyId], references: [id])
+  createdAt         DateTime  @default(now())
   deletedAt         DateTime?
 
   users         User[]
@@ -158,6 +192,10 @@ model Organization {
   invoices      Invoice[]
   smtpServer    SmtpServer?
   backupExports BackupExport[]
+  warehouses    Warehouse[]
+  categories    Category[]
+  brands        Brand[]
+  products      Product[]
 
   @@map("organizations")
 }
@@ -338,4 +376,84 @@ model BackupExport {
 
   @@index([organizationId, requestedAt(sort: Desc)])
   @@map("backup_exports")
+}
+
+// ─── Référentiels tenant ──────────────────────────────────────────────────────
+
+/// Entrepôt physique ou logique d'un tenant.
+/// Soft delete : deletedAt DateTime? — pas de suppression physique (§17 point 7).
+/// version Int : verrouillage optimiste pour les mouvements de stock (S15, §17 point B).
+/// L'index unique partiel (organizationId, name) WHERE deleted_at IS NULL est créé
+/// en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
+model Warehouse {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  address        String?
+  /// true = entrepôt par défaut de l'organisation (un seul par org, géré transactionnellement)
+  isDefault      Boolean      @default(false)
+  /// Compteur de version pour le verrouillage optimiste sur les mouvements de stock (S15)
+  version        Int          @default(0)
+  deletedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@map("warehouses")
+}
+
+// ─── Catalogue tenant ─────────────────────────────────────────────────────────
+
+/// Catégorie de produit, scopée par organisation (S10 — Bloc C).
+/// Soft delete : index uniques partiels (organizationId, code) et (organizationId, name)
+/// créés en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
+model Category {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  /// Code métier court, ex. "ELEC", "ALI" — majuscules et chiffres uniquement, 1–20 chars.
+  code           String
+  name           String
+  deletedAt      DateTime?
+  products       Product[]
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("categories")
+}
+
+/// Marque de produit, scopée par organisation (S10 — Bloc C).
+/// image String? : URL logo — upload réel reporté à S13 (TODO S10-debt: upload réel S13).
+model Brand {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  description    String?
+  /// URL d'un logo de marque — TODO S10-debt: upload réel via stockage S13.
+  image          String?
+  deletedAt      DateTime?
+  products       Product[]
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("brands")
+}
+
+/// Stub produit (S10) — colonnes métier complétées en S14 (Bloc D).
+/// Créé ici pour établir les FK Category→Product et Brand→Product
+/// et permettre la vérification des produits actifs lors du soft-delete d'une catégorie.
+model Product {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  categoryId     String?      @db.Uuid
+  brandId        String?      @db.Uuid
+  deletedAt      DateTime?
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  category       Category?    @relation(fields: [categoryId], references: [id])
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+
+  @@map("products")
 }
