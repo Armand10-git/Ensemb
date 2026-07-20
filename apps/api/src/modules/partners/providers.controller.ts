@@ -135,7 +135,7 @@ export class ProvidersController {
 
   /**
    * POST /api/v1/partners/providers/import — import CSV multipart.
-   * Magic bytes vérifiés via fileFilter (text/csv).
+   * MIME vérifié par multer fileFilter + contrôle des octets réels dans le handler.
    * Taille max : 5 Mo.
    */
   @RequirePermission('suppliers.import')
@@ -146,6 +146,7 @@ export class ProvidersController {
       storage: memoryStorage(),
       limits: { fileSize: 5 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
+        // Premier filtre sur le MIME déclaré — le buffer est re-vérifié dans le handler
         if (
           file.mimetype === 'text/csv' ||
           file.mimetype === 'application/vnd.ms-excel' ||
@@ -165,6 +166,14 @@ export class ProvidersController {
     if (!file) {
       throw new UnprocessableEntityException('Aucun fichier fourni.');
     }
+
+    // Vérification des octets réels : les 512 premiers octets ne doivent pas contenir
+    // de bytes nuls (signature binaire) — les CSV sont du texte pur
+    const probe = file.buffer.slice(0, 512);
+    if (probe.includes(0x00)) {
+      throw new UnprocessableEntityException('Le fichier ne semble pas être un CSV valide.');
+    }
+
     return this.partners.importFromCsv(req.user.organizationId, 'providers', file.buffer);
   }
 }

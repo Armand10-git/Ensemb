@@ -37,11 +37,6 @@ export interface ExcelExportJobData {
   type: 'clients' | 'providers';
 }
 
-// ─── Seuil import synchrone/asynchrone ────────────────────────────────────────
-
-/** Au-delà de ce nombre de lignes, l'import est délégué à BullMQ. */
-const CSV_ASYNC_THRESHOLD = parseInt(process.env['CSV_ASYNC_THRESHOLD'] ?? '50', 10);
-
 const PARTNER_SELECT = {
   id: true,
   code: true,
@@ -179,7 +174,7 @@ export class PartnersService {
   /**
    * Importe des partenaires depuis un buffer CSV.
    * Validation zod ligne par ligne — les lignes invalides sont ignorées et rapportées.
-   * Import synchrone si ≤ CSV_ASYNC_THRESHOLD lignes, délégué à BullMQ sinon.
+   * Toutes les lignes sont traitées en mémoire de façon synchrone (max 5 Mo).
    *
    * @param organizationId - scopé tenant
    * @param type           - 'clients' | 'providers'
@@ -276,16 +271,27 @@ export class PartnersService {
 
   /**
    * Retourne le chemin absolu d'un fichier Excel exporté après vérification ownership.
-   * Le filename doit commencer par l'organizationId du token (anti-IDOR).
+   * Le filename doit commencer par l'organizationId du token (anti-IDOR) et ne peut
+   * contenir aucun séparateur de chemin (protection path traversal).
    *
    * @param organizationId - scopé tenant (depuis req.user)
    * @param filename       - nom du fichier demandé (format : <orgId>-<type>-<ts>.xlsx)
    */
   resolveExportPath(organizationId: string, filename: string): string {
-    if (!filename.startsWith(organizationId)) {
+    // N'accepte que des noms de fichier sans séparateur et avec extension .xlsx
+    const SAFE_FILENAME = /^[\w-]+\.xlsx$/;
+    if (!SAFE_FILENAME.test(filename) || !filename.startsWith(organizationId)) {
       throw new ForbiddenException('Accès refusé à ce fichier.');
     }
-    const filePath = path.join(process.cwd(), 'storage', 'exports', organizationId, filename);
+
+    const dir      = path.join(process.cwd(), 'storage', 'exports', organizationId);
+    const filePath = path.join(dir, filename);
+
+    // Vérification que le chemin résolu reste dans le répertoire de l'org
+    if (!filePath.startsWith(dir + path.sep)) {
+      throw new ForbiddenException('Accès refusé à ce fichier.');
+    }
+
     if (!fs.existsSync(filePath)) {
       throw new NotFoundException('Fichier introuvable ou expiré.');
     }
@@ -520,4 +526,3 @@ export class PartnersService {
   }
 }
 
-export { CSV_ASYNC_THRESHOLD };
