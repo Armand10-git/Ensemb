@@ -398,9 +398,10 @@ model Warehouse {
   /// Compteur de version pour le verrouillage optimiste sur les mouvements de stock (S15)
   version        Int          @default(0)
   deletedAt      DateTime?
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  stocks         ProductWarehouse[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
   @@index([organizationId])
   @@map("warehouses")
@@ -444,31 +445,98 @@ model Brand {
   @@map("brands")
 }
 
-/// Stub produit (S10) — colonnes métier complétées en S14 (Bloc D).
-/// Créé ici pour établir les FK Category→Product et Brand→Product
-/// et permettre la vérification des produits actifs lors du soft-delete d'une catégorie.
-/// unitId / unitSaleId / unitPurchaseId ajoutés en S11 pour la garde du soft-delete des unités.
+/// Produit du catalogue tenant (S14 — Bloc D).
+/// image String? : clé S3 — jamais URL directe (§17 point Y). URL signée générée à la volée.
+/// cost / price / taxRate : Decimal obligatoire — jamais Float (§17 point A).
+/// Soft delete : index unique partiel (organizationId, name) WHERE deleted_at IS NULL en SQL raw.
+/// Un produit isVariant: true a des ProductVariant ; le stock réel est dans ProductWarehouse (S15).
 model Product {
-  id              String       @id @default(uuid()) @db.Uuid
-  organizationId  String       @db.Uuid
-  categoryId      String?      @db.Uuid
-  brandId         String?      @db.Uuid
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  /// Code de référence interne — unique par organisation (actifs)
+  code            String
+  /// Format du code-barres affiché côté client (ex. "EAN13", "CODE128", "QR")
+  barcodeType     String?
+  name            String
+  /// Prix d'achat HT — Decimal obligatoire (§17 point A)
+  cost            Decimal   @db.Decimal(14, 3)
+  /// Prix de vente HT — Decimal obligatoire (§17 point A)
+  price           Decimal   @db.Decimal(14, 3)
+  categoryId      String    @db.Uuid
+  brandId         String?   @db.Uuid
   /// Unité de stock par défaut (ex. "Pièce")
-  unitId          String?      @db.Uuid
+  unitId          String?   @db.Uuid
   /// Unité de vente (ex. "Carton") — peut différer de l'unité de stock
-  unitSaleId      String?      @db.Uuid
+  unitSaleId      String?   @db.Uuid
   /// Unité d'achat (ex. "Carton") — peut différer de l'unité de stock
-  unitPurchaseId  String?      @db.Uuid
+  unitPurchaseId  String?   @db.Uuid
+  /// Taux de TVA — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
+  taxRate         Decimal   @default(0) @db.Decimal(5, 4)
+  /// "percentage" | "fixed"
+  taxMethod       String    @default("percentage")
+  /// Clé S3 de l'image produit — jamais URL directe (§17 point Y)
+  image           String?
+  note            String?
+  /// Seuil d'alerte de stock bas (entier, 0 = désactivé)
+  stockAlert      Int       @default(0)
+  /// true = produit avec variantes (tailles, couleurs…)
+  isVariant       Boolean   @default(false)
+  isActive        Boolean   @default(true)
   deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  category       Category?    @relation(fields: [categoryId], references: [id])
-  brand          Brand?       @relation(fields: [brandId], references: [id])
-  unit           Unit?        @relation("ProductUnit", fields: [unitId], references: [id])
-  unitSale       Unit?        @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
-  unitPurchase   Unit?        @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  category       Category         @relation(fields: [categoryId], references: [id])
+  brand          Brand?           @relation(fields: [brandId], references: [id])
+  unit           Unit?            @relation("ProductUnit", fields: [unitId], references: [id])
+  unitSale       Unit?            @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
+  unitPurchase   Unit?            @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
+  variants       ProductVariant[]
+  stocks         ProductWarehouse[]
 
+  /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
+  @@unique([organizationId, code])
   @@map("products")
+}
+
+/// Variante d'un produit (S14 — Bloc D).
+/// Pas de champ quantity — unique source de vérité du stock = ProductWarehouse.productVariantId (S15).
+model ProductVariant {
+  id        String    @id @default(uuid()) @db.Uuid
+  productId String    @db.Uuid
+  /// Libellé de la variante (ex. "Rouge / L", "500 ml")
+  name      String?
+  deletedAt DateTime?
+
+  product Product          @relation(fields: [productId], references: [id])
+  stocks  ProductWarehouse[]
+
+  @@map("product_variants")
+}
+
+/// Stock d'un produit (ou d'une variante) dans un entrepôt (S14 stub — géré en S15).
+/// version Int : verrouillage optimiste pour tout mouvement de stock (§17 point B).
+/// quantity Decimal — jamais Float (§17 point A).
+model ProductWarehouse {
+  id               String         @id @default(uuid()) @db.Uuid
+  productId        String         @db.Uuid
+  warehouseId      String         @db.Uuid
+  productVariantId String?        @db.Uuid
+  /// Quantité en stock — Decimal obligatoire (§17 point A)
+  quantity         Decimal        @default(0) @db.Decimal(14, 3)
+  /// Compteur de version pour le verrouillage optimiste (S15, §17 point B)
+  version          Int            @default(0)
+
+  product   Product         @relation(fields: [productId], references: [id])
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
+  variant   ProductVariant? @relation(fields: [productVariantId], references: [id])
+
+  /// Unicité appliquée par deux index partiels SQL (migration S14) :
+  ///   "product_warehouse_no_variant_unique"   WHERE productVariantId IS NULL
+  ///   "product_warehouse_with_variant_unique" WHERE productVariantId IS NOT NULL
+  /// (PostgreSQL traite NULL ≠ NULL dans les contraintes UNIQUE — index partiels nécessaires)
+  @@map("product_warehouse")
 }
 
 /// Unité de mesure / conditionnement, scopée par organisation (S11 — Bloc C).
