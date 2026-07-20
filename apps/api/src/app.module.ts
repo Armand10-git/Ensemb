@@ -19,6 +19,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
 import { BackupModule } from './modules/backup/backup.module';
 import { CurrencyModule } from './modules/currency/currency.module';
 import { WarehouseModule } from './modules/warehouse/warehouse.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { WarehouseModule } from './modules/warehouse/warehouse.module';
     BackupModule,
     CurrencyModule,
     WarehouseModule,
+    CatalogModule,
   ],
 })
 export class AppModule {}

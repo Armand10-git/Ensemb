@@ -193,6 +193,9 @@ model Organization {
   smtpServer    SmtpServer?
   backupExports BackupExport[]
   warehouses    Warehouse[]
+  categories    Category[]
+  brands        Brand[]
+  products      Product[]
 
   @@map("organizations")
 }
@@ -398,4 +401,59 @@ model Warehouse {
 
   @@index([organizationId])
   @@map("warehouses")
+}
+
+// ─── Catalogue tenant ─────────────────────────────────────────────────────────
+
+/// Catégorie de produit, scopée par organisation (S10 — Bloc C).
+/// Soft delete : index uniques partiels (organizationId, code) et (organizationId, name)
+/// créés en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
+model Category {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  /// Code métier court, ex. "ELEC", "ALI" — majuscules et chiffres uniquement, 1–20 chars.
+  code           String
+  name           String
+  deletedAt      DateTime?
+  products       Product[]
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("categories")
+}
+
+/// Marque de produit, scopée par organisation (S10 — Bloc C).
+/// image String? : URL logo — upload réel reporté à S13 (TODO S10-debt: upload réel S13).
+model Brand {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  description    String?
+  /// URL d'un logo de marque — TODO S10-debt: upload réel via stockage S13.
+  image          String?
+  deletedAt      DateTime?
+  products       Product[]
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("brands")
+}
+
+/// Stub produit (S10) — colonnes métier complétées en S14 (Bloc D).
+/// Créé ici pour établir les FK Category→Product et Brand→Product
+/// et permettre la vérification des produits actifs lors du soft-delete d'une catégorie.
+model Product {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  categoryId     String?      @db.Uuid
+  brandId        String?      @db.Uuid
+  deletedAt      DateTime?
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  category       Category?    @relation(fields: [categoryId], references: [id])
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+
+  @@map("products")
 }
