@@ -108,16 +108,15 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 }
 
 function BrandAvatar({ name, image }: { name: string; image: string | null }) {
-  if (image) {
+  const [imgError, setImgError] = useState(false);
+
+  if (image && !imgError) {
     return (
       <img
         src={image}
         alt={`Logo ${name}`}
         className="h-8 w-8 rounded-full object-cover"
-        onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = 'none';
-          (e.currentTarget.nextSibling as HTMLElement | null)?.removeAttribute('hidden');
-        }}
+        onError={() => setImgError(true)}
       />
     );
   }
