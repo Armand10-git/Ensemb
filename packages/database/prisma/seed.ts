@@ -165,6 +165,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   { name: 'backup.manage', label: 'Gérer les exports de données (T09)' },
   { name: 'settings.system', label: 'Modifier les réglages système' },
   { name: 'organization.branding.edit', label: 'Modifier le branding (logo/couleurs)' },
+  { name: 'organization.settings.edit', label: 'Modifier les réglages de l\'organisation (devise par défaut…)' },
   { name: 'billing.view', label: 'Voir la facturation' },
   { name: 'billing.manage', label: 'Gérer la facturation (plan, paiement)' },
 
@@ -326,7 +327,22 @@ async function main(): Promise<void> {
   });
   console.log('✔  PlatformSetting launchPromoEndsAt insérée/mise à jour');
 
-  // 7. PlatformAdmin de démo (TOTP non encore configuré)
+  // 7. Devise XAF (globale de plateforme, idempotent sur le code)
+  const xaf = await prisma.currency.upsert({
+    where: { code: 'XAF' },
+    update: { name: 'Franc CFA BEAC', symbol: 'XAF', symbolPosition: 'AFTER', decimalPlaces: 0, isActive: true },
+    create: { code: 'XAF', name: 'Franc CFA BEAC', symbol: 'XAF', symbolPosition: 'AFTER', decimalPlaces: 0, isActive: true },
+  });
+  console.log(`✔  Devise XAF (id: ${xaf.id})`);
+
+  // Mise à jour de l'org démo avec la devise par défaut XAF
+  await prisma.organization.update({
+    where: { subdomain: 'demo' },
+    data: { defaultCurrencyId: xaf.id },
+  });
+  console.log('✔  Organisation démo : defaultCurrencyId = XAF');
+
+  // 8. PlatformAdmin de démo (TOTP non encore configuré)
   const adminPassword = await bcrypt.hash('Admin@Ensemb2026!', 12);
   await prisma.platformAdmin.upsert({
     where: { email: 'admin@ensemb.platform' },

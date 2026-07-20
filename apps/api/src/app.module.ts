@@ -17,6 +17,8 @@ import { BillingModule } from './modules/billing/billing.module';
 import { SmtpModule } from './modules/smtp/smtp.module';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module';
 import { BackupModule } from './modules/backup/backup.module';
+import { CurrencyModule } from './modules/currency/currency.module';
+import { WarehouseModule } from './modules/warehouse/warehouse.module';
 
 @Module({
   imports: [
@@ -45,6 +47,8 @@ import { BackupModule } from './modules/backup/backup.module';
     SmtpModule,
     PlatformAdminModule,
     BackupModule,
+    CurrencyModule,
+    WarehouseModule,
   ],
 })
 export class AppModule {}
