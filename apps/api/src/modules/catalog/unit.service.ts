@@ -178,7 +178,7 @@ export class UnitService {
    * @param dto            - Champs à mettre à jour (partiel)
    */
   async update(id: string, organizationId: string, dto: UpdateUnitDto): Promise<UnitSummary> {
-    const existing = await this.findOne(id, organizationId);
+    await this.findOne(id, organizationId);
 
     if (dto.baseUnitId !== undefined) {
       const activeSubCount = await this.prisma.unit.count({
@@ -207,9 +207,6 @@ export class UnitService {
         }
       }
     }
-
-    // Silence unused variable warning from findOne result
-    void existing;
 
     try {
       return await this.prisma.unit.update({
