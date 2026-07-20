@@ -21,6 +21,7 @@ import { CurrencyModule } from './modules/currency/currency.module';
 import { WarehouseModule } from './modules/warehouse/warehouse.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { PartnersModule } from './modules/partners/partners.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { PartnersModule } from './modules/partners/partners.module';
     WarehouseModule,
     CatalogModule,
     PartnersModule,
+    UploadsModule,
   ],
 })
 export class AppModule {}

@@ -55,6 +55,24 @@ services:
       retries: 5
       start_period: 15s
 
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ensemb
+      MINIO_ROOT_PASSWORD: ensemb_dev
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Process worker BullMQ dédié — même image, entrypoint distinct (§12.1)
   worker:
     build:
@@ -85,3 +103,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  minio_data:

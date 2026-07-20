@@ -44,7 +44,7 @@
 - [ ] `PartnersModule` (clients, fournisseurs) + import CSV / export Excel (via `excel-queue`)
 
 ### P4 — Produits & stock
-- [ ] `UploadsModule` : upload/redimensionnement d'images (`multer` + `sharp`), branché sur produits/marques/logo/avatar (§17, point E) — stockage objet S3-compatible dès cette phase, jamais le disque local (§17, point Y)
+- [x] `UploadsModule` : upload/redimensionnement d'images (`multer` + `sharp`), branché sur produits/marques/logo/avatar (§17, point E) — stockage objet S3-compatible dès cette phase, jamais le disque local (§17, point Y) — S13 ✅
 - [ ] CRUD produit + variantes + code-barres, avec choix du format de papier pour l'impression d'étiquettes
 - [ ] `InventoryModule` : stock par entrepôt, ajustements, transferts, événement `stock:updated`
 - [ ] Champ `ProductWarehouse.version` posé dès la migration initiale (§17, point B), même si le verrouillage n'est exploité qu'en P5
