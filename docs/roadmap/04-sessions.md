@@ -74,7 +74,7 @@ Les phases P0–P14 (§13) donnent le grain macro ; cette section les subdivise 
 
 | # | Contenu | Fait quand… |
 |---|---|---|
-| S13 | `UploadsModule` (`multer` + `sharp`), testé isolément | Upload d'une image redimensionnée fonctionnel avant tout branchement |
+| S13 | `UploadsModule` (`multer` + `sharp`), testé isolément | Upload d'une image redimensionnée fonctionnel avant tout branchement | ✅ 2026-07-21 — PR `feat/s13-uploads-module` ; StorageService (S3/MinIO), UploadsService (magic bytes file-type + sharp re-encode), UploadsController (POST + GET signed-url, IDOR check) ; 17 tests unitaires + tests e2e MinIO ; file-type v16 CJS. |
 | S14 | `Product` + `ProductVariant` : schéma, CRUD, code-barres, upload branché | Création d'un produit avec variante et image |
 | S15 | `ProductWarehouse` (stock par entrepôt) + colonne `version` posée (§17 point B) | Quantité par entrepôt consultable, `version` incrémentable |
 | S15b | `DocumentCounter` : génération transactionnelle des références par `(organizationId, documentType)` (§17 point X) + vérification des index composites et index uniques partiels sur les tables documentaires (§4) | Test de concurrence : N créations simultanées produisent N références distinctes, sans collision ni trou inexpliqué |
