@@ -356,6 +356,57 @@ async function main(): Promise<void> {
   });
   console.log('✔  PlatformAdmin admin@ensemb.platform inséré/mis à jour');
 
+  // 9. Unités de mesure démo (idempotent — findFirst + create si absente)
+  async function upsertUnit(params: {
+    organizationId: string;
+    name: string;
+    shortName: string;
+    baseUnitId?: string | null;
+    operator?: string;
+    operatorValue?: number;
+  }) {
+    const existing = await prisma.unit.findFirst({
+      where: { organizationId: params.organizationId, name: params.name, deletedAt: null },
+    });
+    if (existing) return existing;
+    return prisma.unit.create({
+      data: {
+        organizationId: params.organizationId,
+        name: params.name,
+        shortName: params.shortName,
+        baseUnitId: params.baseUnitId ?? null,
+        operator: params.operator ?? '*',
+        operatorValue: params.operatorValue ?? 1,
+      },
+    });
+  }
+
+  const piece = await upsertUnit({ organizationId: org.id, name: 'Pièce', shortName: 'pcs' });
+  console.log(`✔  Unité "Pièce" (id: ${piece.id})`);
+
+  await upsertUnit({
+    organizationId: org.id,
+    name: 'Carton',
+    shortName: 'ctn',
+    baseUnitId: piece.id,
+    operator: '*',
+    operatorValue: 12,
+  });
+  console.log('✔  Unité "Carton" (= 12 × Pièce)');
+
+  const litre = await upsertUnit({ organizationId: org.id, name: 'Litre', shortName: 'L' });
+  console.log(`✔  Unité "Litre" (id: ${litre.id})`);
+
+  await upsertUnit({
+    organizationId: org.id,
+    name: 'Centilitre',
+    shortName: 'cL',
+    baseUnitId: litre.id,
+    operator: '/',
+    operatorValue: 100,
+  });
+  console.log('✔  Unité "Centilitre" (= Litre ÷ 100)');
+
   console.log('🎉 Seed terminé avec succès.');
 }
 

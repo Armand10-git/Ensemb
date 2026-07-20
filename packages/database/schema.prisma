@@ -195,6 +195,7 @@ model Organization {
   warehouses    Warehouse[]
   categories    Category[]
   brands        Brand[]
+  units         Unit[]
   products      Product[]
 
   @@map("organizations")
@@ -444,16 +445,59 @@ model Brand {
 /// Stub produit (S10) — colonnes métier complétées en S14 (Bloc D).
 /// Créé ici pour établir les FK Category→Product et Brand→Product
 /// et permettre la vérification des produits actifs lors du soft-delete d'une catégorie.
+/// unitId / unitSaleId / unitPurchaseId ajoutés en S11 pour la garde du soft-delete des unités.
 model Product {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
-  categoryId     String?      @db.Uuid
-  brandId        String?      @db.Uuid
-  deletedAt      DateTime?
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @db.Uuid
+  categoryId      String?      @db.Uuid
+  brandId         String?      @db.Uuid
+  /// Unité de stock par défaut (ex. "Pièce")
+  unitId          String?      @db.Uuid
+  /// Unité de vente (ex. "Carton") — peut différer de l'unité de stock
+  unitSaleId      String?      @db.Uuid
+  /// Unité d'achat (ex. "Carton") — peut différer de l'unité de stock
+  unitPurchaseId  String?      @db.Uuid
+  deletedAt       DateTime?
 
   organization   Organization @relation(fields: [organizationId], references: [id])
   category       Category?    @relation(fields: [categoryId], references: [id])
   brand          Brand?       @relation(fields: [brandId], references: [id])
+  unit           Unit?        @relation("ProductUnit", fields: [unitId], references: [id])
+  unitSale       Unit?        @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
+  unitPurchase   Unit?        @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
 
   @@map("products")
+}
+
+/// Unité de mesure / conditionnement, scopée par organisation (S11 — Bloc C).
+/// Hiérarchie auto-référentielle max 1 niveau : une unité de base (baseUnitId = null)
+/// ou une unité dérivée (baseUnitId non nul) — ex. Carton = 12 × Pièce.
+/// operator "*" ou "/" ; operatorValue Decimal (facteur de conversion, §17 point A).
+/// Soft delete : index uniques partiels (organizationId, name) et (organizationId, shortName)
+/// créés en SQL raw dans la migration (WHERE deleted_at IS NULL).
+model Unit {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  /// Libellé complet : "Pièce", "Carton", "Litre"
+  name           String
+  /// Nom court affiché : "pcs", "ctn", "L"
+  shortName      String
+  /// Null = unité de base ; non nul = unité dérivée (1 niveau max)
+  baseUnitId     String?   @db.Uuid
+  baseUnit       Unit?     @relation("UnitHierarchy", fields: [baseUnitId], references: [id])
+  subUnits       Unit[]    @relation("UnitHierarchy")
+  /// Opérateur de conversion : "*" (multiplication) ou "/" (division)
+  operator       String    @default("*")
+  /// Facteur de conversion — Decimal obligatoire (§17 point A)
+  operatorValue  Decimal   @default(1) @db.Decimal(14, 6)
+  deletedAt      DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  /// Produits référençant cette unité (stub S11 — colonnes complètes en S14)
+  products         Product[] @relation("ProductUnit")
+  productsSale     Product[] @relation("ProductUnitSale")
+  productsPurchase Product[] @relation("ProductUnitPurchase")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("units")
 }
