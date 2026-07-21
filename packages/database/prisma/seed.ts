@@ -67,6 +67,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Transferts de stock
   { name: 'transfers.view', label: 'Voir les transferts' },
   { name: 'transfers.create', label: 'Créer un transfert' },
+  { name: 'transfers.validate', label: 'Valider un transfert (mouvemente le stock)' },
   { name: 'transfers.edit', label: 'Modifier un transfert' },
   { name: 'transfers.delete', label: 'Supprimer un transfert' },
 
