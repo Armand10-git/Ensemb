@@ -202,6 +202,7 @@ model Organization {
   documentCounters DocumentCounter[]
   adjustments      Adjustment[]
   transfers        StockTransfer[]
+  notifications    Notification[]
 
   @@map("organizations")
 }
@@ -276,10 +277,11 @@ model User {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  organization Organization  @relation(fields: [organizationId], references: [id])
-  roles        RoleOnUser[]
-  adjustments  Adjustment[]
-  transfers    StockTransfer[]
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  roles         RoleOnUser[]
+  adjustments   Adjustment[]
+  transfers     StockTransfer[]
+  notifications Notification[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -780,4 +782,31 @@ model StockTransferDetail {
   product  Product        @relation(fields: [productId], references: [id])
 
   @@map("stock_transfer_details")
+}
+
+// ─── Notifications (S18 — Bloc D) ────────────────────────────────────────────
+
+/// Notification persistante par utilisateur (§17 point I — S18).
+/// Persiste ce que Socket.io ne fait que diffuser en direct : si aucun client
+/// n'est connecté au moment de l'émission, la notification est retrouvée
+/// à la prochaine connexion.
+/// type : "stock.lowAlert" | "backup.completed" | …
+/// payload : données spécifiques au type (ex. { productId, productName, … })
+model Notification {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  /// Catégorie machine-readable : "stock.lowAlert", "backup.completed", …
+  type           String
+  /// Données spécifiques au type — structure définie par le service émetteur.
+  payload        Json
+  /// Null = non lue ; posé à now() par markAsRead / markAllAsRead.
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, userId, readAt])
+  @@map("notifications")
 }

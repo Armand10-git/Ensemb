@@ -10,6 +10,7 @@ import { StockTransferService } from '../stock-transfer.service';
 import { PrismaService } from '../../../common/prisma.service';
 import { DocumentCounterService } from '../../../common/document-counter.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { NotificationService } from '../../notifications/notification.service';
 import { ProductWarehouseService, OptimisticLockException } from '../product-warehouse.service';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -109,9 +110,10 @@ describe('StockTransferService', () => {
       },
     );
 
-    const dcMock  = { nextReference: jest.fn().mockResolvedValue(REF) };
-    const rtMock  = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
-    const pwMock  = { adjustStock: jest.fn() };
+    const dcMock    = { nextReference: jest.fn().mockResolvedValue(REF) };
+    const rtMock    = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
+    const pwMock    = { adjustStock: jest.fn() };
+    const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -120,6 +122,7 @@ describe('StockTransferService', () => {
         { provide: DocumentCounterService,  useValue: dcMock },
         { provide: RealtimeGateway,         useValue: rtMock },
         { provide: ProductWarehouseService, useValue: pwMock },
+        { provide: NotificationService,     useValue: notifMock },
       ],
     }).compile();
 

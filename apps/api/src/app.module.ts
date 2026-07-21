@@ -24,6 +24,7 @@ import { CatalogModule } from './modules/catalog/catalog.module';
 import { PartnersModule } from './modules/partners/partners.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
+import { NotificationModule } from './modules/notifications/notification.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { InventoryModule } from './modules/inventory/inventory.module';
     PartnersModule,
     UploadsModule,
     InventoryModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

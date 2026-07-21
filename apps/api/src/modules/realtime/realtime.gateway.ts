@@ -87,9 +87,13 @@ export class RealtimeGateway
       const payload = this.jwt.verify<JwtPayload>(token, { secret });
 
       socket.data = { userId: payload.sub, organizationId: payload.organizationId };
+      // Room organisation (broadcast métier) + room personnelle (notifications ciblées §17 I)
       await socket.join(`org:${payload.organizationId}`);
+      await socket.join(`org:${payload.organizationId}:user:${payload.sub}`);
 
-      this.logger.debug(`Socket ${socket.id} authentifie — room org:${payload.organizationId}`);
+      this.logger.debug(
+        `Socket ${socket.id} authentifie — rooms org:${payload.organizationId} + user:${payload.sub}`,
+      );
     } catch {
       this.disconnect(socket, 'token invalide ou expire');
     }
