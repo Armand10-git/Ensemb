@@ -91,7 +91,9 @@ export class StockTransferService {
   /**
    * Crée un transfert en statut DRAFT avec ses lignes dans une transaction.
    * Référence générée via DocumentCounterService.nextReference.
-   * Vérifie l'ownership des deux entrepôts et de chaque productId (anti-IDOR).
+   * Vérifie l'ownership des entrepôts, des produits et des variantes DANS la transaction
+   * (anti-IDOR + anti-TOCTOU : un soft-delete concurrent ne peut pas se glisser entre
+   * le contrôle et l'écriture).
    *
    * @throws BadRequestException si fromWarehouseId === toWarehouseId.
    * @throws NotFoundException si un entrepôt ou produit est introuvable.
@@ -108,17 +110,65 @@ export class StockTransferService {
       );
     }
 
-    await Promise.all([
-      this.verifyWarehouseOwnership(dto.fromWarehouseId, organizationId),
-      this.verifyWarehouseOwnership(dto.toWarehouseId, organizationId),
-    ]);
-    await this.verifyProductsOwnership(
-      dto.details.map((d) => d.productId),
-      organizationId,
-    );
-    await this.verifyProductVariantsOwnership(dto.details, organizationId);
-
     const transfer = await this.prisma.$transaction(async (tx) => {
+      // Vérifications d'ownership DANS la transaction — élimine le TOCTOU entre
+      // le contrôle et la création (soft-delete concurrent impossible de se glisser).
+      const [whFrom, whTo] = await Promise.all([
+        tx.warehouse.findUnique({
+          where: { id: dto.fromWarehouseId },
+          select: { organizationId: true, deletedAt: true },
+        }),
+        tx.warehouse.findUnique({
+          where: { id: dto.toWarehouseId },
+          select: { organizationId: true, deletedAt: true },
+        }),
+      ]);
+      if (!whFrom || whFrom.deletedAt !== null)
+        throw new NotFoundException('Entrepôt source introuvable.');
+      if (whFrom.organizationId !== organizationId)
+        throw new ForbiddenException("Accès refusé à l'entrepôt source.");
+      if (!whTo || whTo.deletedAt !== null)
+        throw new NotFoundException('Entrepôt destination introuvable.');
+      if (whTo.organizationId !== organizationId)
+        throw new ForbiddenException("Accès refusé à l'entrepôt destination.");
+
+      const productIds = [...new Set(dto.details.map((d) => d.productId))];
+      const products = await tx.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, organizationId: true, deletedAt: true },
+      });
+      for (const pid of productIds) {
+        const product = products.find((p) => p.id === pid);
+        if (!product || product.deletedAt !== null)
+          throw new NotFoundException('Produit introuvable.');
+        if (product.organizationId !== organizationId)
+          throw new ForbiddenException('Accès refusé.');
+      }
+
+      const variantDetails = dto.details.filter((d) => d.productVariantId);
+      if (variantDetails.length > 0) {
+        const variantIds = [
+          ...new Set(variantDetails.map((d) => d.productVariantId!)),
+        ];
+        const variants = await tx.productVariant.findMany({
+          where: { id: { in: variantIds }, deletedAt: null },
+          select: {
+            id: true,
+            productId: true,
+            product: { select: { organizationId: true } },
+          },
+        });
+        for (const detail of variantDetails) {
+          const variant = variants.find((v) => v.id === detail.productVariantId);
+          if (!variant)
+            throw new NotFoundException('Variante introuvable.');
+          if (variant.productId !== detail.productId)
+            throw new ForbiddenException('Accès refusé.');
+          if (variant.product.organizationId !== organizationId)
+            throw new ForbiddenException('Accès refusé.');
+        }
+      }
+
       const reference = await this.documentCounter.nextReference(
         tx,
         organizationId,
@@ -217,13 +267,14 @@ export class StockTransferService {
             select: {
               id: true,
               version: true,
+              quantity: true,
               product: { select: { stockAlert: true, name: true } },
             },
           });
 
           if (!pwFrom) {
             throw new NotFoundException(
-              `Stock introuvable pour le produit ${detail.productId} dans l'entrepôt source. ` +
+              "Stock introuvable dans l'entrepôt source. " +
                 'Initialisez le stock avant de créer un transfert.',
             );
           }
@@ -240,12 +291,21 @@ export class StockTransferService {
 
           if (!pwTo) {
             throw new NotFoundException(
-              `Stock introuvable pour le produit ${detail.productId} dans l'entrepôt destination. ` +
+              "Stock introuvable dans l'entrepôt destination. " +
                 'Initialisez le stock avant de créer un transfert.',
             );
           }
 
           const delta = new Decimal(detail.quantity);
+
+          // Garde applicative : interdit de descendre sous zéro avant même l'appel
+          // à adjustStock (l'invariant quantity ≥ 0 est également garanti par CHECK en DDL).
+          if (delta.greaterThan(pwFrom.quantity)) {
+            throw new BadRequestException(
+              `Stock insuffisant dans l'entrepôt source : ` +
+                `disponible ${pwFrom.quantity.toFixed(3)}, demandé ${delta.toFixed(3)}.`,
+            );
+          }
 
           // Décrémente la source
           const updatedFrom = await this.productWarehouseService.adjustStock(
@@ -461,66 +521,5 @@ export class StockTransferService {
     }
   }
 
-  /**
-   * Vérifie que tous les produits appartiennent à l'organisation (anti-IDOR).
-   */
-  private async verifyProductsOwnership(
-    productIds: string[],
-    organizationId: string,
-  ): Promise<void> {
-    const uniqueIds = [...new Set(productIds)];
-
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: uniqueIds } },
-      select: { id: true, organizationId: true, deletedAt: true },
-    });
-
-    for (const pid of uniqueIds) {
-      const product = products.find((p) => p.id === pid);
-      if (!product || product.deletedAt !== null) {
-        throw new NotFoundException(`Produit ${pid} introuvable.`);
-      }
-      if (product.organizationId !== organizationId) {
-        throw new ForbiddenException(`Accès refusé au produit ${pid}.`);
-      }
-    }
-  }
-
-  /**
-   * Vérifie que chaque productVariantId appartient au productId déclaré dans la même ligne
-   * et à l'organisation courante (anti-IDOR).
-   */
-  private async verifyProductVariantsOwnership(
-    details: Array<{ productId: string; productVariantId?: string }>,
-    organizationId: string,
-  ): Promise<void> {
-    const variantDetails = details.filter((d) => d.productVariantId);
-    if (variantDetails.length === 0) return;
-
-    const uniqueVariantIds = [...new Set(variantDetails.map((d) => d.productVariantId!))];
-
-    const variants = await this.prisma.productVariant.findMany({
-      where: { id: { in: uniqueVariantIds }, deletedAt: null },
-      select: {
-        id: true,
-        productId: true,
-        product: { select: { organizationId: true } },
-      },
-    });
-
-    for (const detail of variantDetails) {
-      const variant = variants.find((v) => v.id === detail.productVariantId);
-      if (!variant) {
-        throw new NotFoundException(`Variante ${detail.productVariantId!} introuvable.`);
-      }
-      if (variant.productId !== detail.productId) {
-        throw new ForbiddenException(
-          `La variante ${detail.productVariantId!} n'appartient pas au produit ${detail.productId}.`,
-        );
-      }
-      if (variant.product.organizationId !== organizationId) {
-        throw new ForbiddenException(`Accès refusé à la variante ${detail.productVariantId!}.`);
-      }
-    }
-  }
 }
+
