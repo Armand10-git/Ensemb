@@ -45,7 +45,7 @@ let productAId: string;
 let warehouseAId: string;
 let pwAId: string; // ProductWarehouse id
 
-const PERMS = ['adjustments.view', 'adjustments.create', 'adjustments.delete'];
+const PERMS = ['adjustments.view', 'adjustments.create', 'adjustments.validate', 'adjustments.delete'];
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 

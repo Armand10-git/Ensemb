@@ -103,6 +103,7 @@ export class AdjustmentService {
       dto.details.map((d) => d.productId),
       organizationId,
     );
+    await this.verifyProductVariantsOwnership(dto.details, organizationId);
 
     const adjustment = await this.prisma.$transaction(async (tx) => {
       const reference = await this.documentCounter.nextReference(
@@ -145,50 +146,61 @@ export class AdjustmentService {
    * dans une transaction Serializable, puis passe status = VALIDATED.
    * Émet stock:updated et stock:lowAlert (si seuil atteint) après la transaction.
    *
+   * Le findUnique + contrôle de statut sont effectués DANS la transaction Serializable
+   * pour éliminer le TOCTOU : deux requêtes concurrentes ne peuvent pas toutes deux
+   * passer le check DRAFT et double-appliquer le mouvement de stock.
+   *
    * @throws BadRequestException si l'ajustement n'est pas en statut DRAFT.
-   * @throws ConflictException si un conflit de version optimiste est détecté (409).
+   * @throws ConflictException si un conflit de version optimiste ou de sérialisation est détecté (409).
    * @throws NotFoundException si l'ajustement ou un ProductWarehouse est introuvable.
    */
   async validate(id: string, organizationId: string): Promise<AdjustmentResponse> {
-    const existing = await this.prisma.adjustment.findUnique({
-      where: { id },
-      select: {
-        ...ADJUSTMENT_SELECT,
-        details: { select: DETAIL_SELECT },
-      },
-    });
-
-    if (!existing || existing.deletedAt !== null) {
-      throw new NotFoundException('Ajustement introuvable.');
-    }
-    if (existing.organizationId !== organizationId) {
-      throw new ForbiddenException('Accès refusé.');
-    }
-    if (existing.status !== 'DRAFT') {
-      throw new BadRequestException(
-        "Cet ajustement est déjà validé et ne peut pas être revalidé.",
-      );
-    }
-
-    // Collecter les mises à jour de stock pour les émettre après la transaction
     const stockUpdates: Array<{
       productId: string;
-      warehouseId: string;
       newQuantity: Decimal;
       productName: string;
       stockAlert: number;
       isSoustraction: boolean;
     }> = [];
 
+    // warehouseId capturé depuis la transaction pour les émissions WebSocket post-transaction
+    let capturedWarehouseId!: string;
+
     await this.prisma.$transaction(
       async (tx) => {
+        // Lire le statut DANS la transaction Serializable — élimine le TOCTOU entre
+        // deux requêtes concurrentes de validation sur le même ajustement.
+        const existing = await tx.adjustment.findUnique({
+          where: { id },
+          select: {
+            ...ADJUSTMENT_SELECT,
+            details: { select: DETAIL_SELECT },
+          },
+        });
+
+        if (!existing || existing.deletedAt !== null) {
+          throw new NotFoundException('Ajustement introuvable.');
+        }
+        if (existing.organizationId !== organizationId) {
+          throw new ForbiddenException('Accès refusé.');
+        }
+        if (existing.status !== 'DRAFT') {
+          throw new BadRequestException(
+            "Cet ajustement est déjà validé et ne peut pas être revalidé.",
+          );
+        }
+
+        capturedWarehouseId = existing.warehouseId;
+
         for (const detail of existing.details) {
-          // Trouver le ProductWarehouse correspondant
+          // Filtre product: { organizationId } : protège contre l'IDOR sur productVariantId
+          // (un attaquant ne peut pas pointer vers un ProductWarehouse d'une autre org)
           const pw = await tx.productWarehouse.findFirst({
             where: {
               productId: detail.productId,
               warehouseId: existing.warehouseId,
               productVariantId: detail.productVariantId ?? null,
+              product: { organizationId },
             },
             select: { id: true, version: true, product: { select: { stockAlert: true, name: true } } },
           });
@@ -215,7 +227,6 @@ export class AdjustmentService {
 
           stockUpdates.push({
             productId: detail.productId,
-            warehouseId: existing.warehouseId,
             newQuantity: updated.quantity,
             productName: pw.product.name,
             stockAlert: pw.product.stockAlert,
@@ -235,6 +246,16 @@ export class AdjustmentService {
           'Conflit de version sur le stock : un autre utilisateur a modifié le stock simultanément. Veuillez réessayer.',
         );
       }
+      // P2034 : échec de sérialisation PostgreSQL (SSI) — se produit si la transaction
+      // Serializable détecte un conflit que l'optimistic lock n'a pas attrapé en premier.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2034'
+      ) {
+        throw new ConflictException(
+          'Conflit de concurrence détecté. Veuillez réessayer.',
+        );
+      }
       throw err;
     });
 
@@ -247,7 +268,7 @@ export class AdjustmentService {
     this.realtimeGateway.server
       .to(`org:${organizationId}`)
       .emit('stock:updated', {
-        warehouseId: existing.warehouseId,
+        warehouseId: capturedWarehouseId,
         products: updatedProducts,
       });
 
@@ -292,6 +313,11 @@ export class AdjustmentService {
     warehouseId?: string,
     status?: AdjustmentStatus,
   ): Promise<PaginatedResult<AdjustmentResponse>> {
+    // Vérifier l'ownership du warehouseId fourni en filtre (anti-oracle d'énumération)
+    if (warehouseId) {
+      await this.verifyWarehouseOwnership(warehouseId, organizationId);
+    }
+
     const where: Prisma.AdjustmentWhereInput = {
       organizationId,
       deletedAt: null,
@@ -409,6 +435,45 @@ export class AdjustmentService {
       }
       if (product.organizationId !== organizationId) {
         throw new ForbiddenException(`Accès refusé au produit ${pid}.`);
+      }
+    }
+  }
+
+  /**
+   * Vérifie que chaque productVariantId appartient au productId déclaré dans la même ligne
+   * et à l'organisation courante (anti-IDOR).
+   * Les lignes sans variante sont ignorées.
+   */
+  private async verifyProductVariantsOwnership(
+    details: Array<{ productId: string; productVariantId?: string }>,
+    organizationId: string,
+  ): Promise<void> {
+    const variantDetails = details.filter((d) => d.productVariantId);
+    if (variantDetails.length === 0) return;
+
+    const uniqueVariantIds = [...new Set(variantDetails.map((d) => d.productVariantId!))];
+
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: uniqueVariantIds }, deletedAt: null },
+      select: {
+        id: true,
+        productId: true,
+        product: { select: { organizationId: true } },
+      },
+    });
+
+    for (const detail of variantDetails) {
+      const variant = variants.find((v) => v.id === detail.productVariantId);
+      if (!variant) {
+        throw new NotFoundException(`Variante ${detail.productVariantId!} introuvable.`);
+      }
+      if (variant.productId !== detail.productId) {
+        throw new ForbiddenException(
+          `La variante ${detail.productVariantId!} n'appartient pas au produit ${detail.productId}.`,
+        );
+      }
+      if (variant.product.organizationId !== organizationId) {
+        throw new ForbiddenException(`Accès refusé à la variante ${detail.productVariantId!}.`);
       }
     }
   }

@@ -73,6 +73,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Ajustements de stock
   { name: 'adjustments.view', label: 'Voir les ajustements' },
   { name: 'adjustments.create', label: 'Créer un ajustement' },
+  { name: 'adjustments.validate', label: 'Valider un ajustement (mouvemente le stock)' },
   { name: 'adjustments.edit', label: 'Modifier un ajustement' },
   { name: 'adjustments.delete', label: 'Supprimer un ajustement' },
 

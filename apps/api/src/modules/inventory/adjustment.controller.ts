@@ -109,9 +109,9 @@ export class AdjustmentController {
   /**
    * PATCH /api/v1/inventory/adjustments/:id/validate
    * Valide l'ajustement : mouvemente le stock de chaque ligne et passe en VALIDATED.
-   * Idempotence garantie par le check status === DRAFT.
+   * Idempotence garantie par le check status === DRAFT (dans la transaction Serializable).
    */
-  @RequirePermission('adjustments.create')
+  @RequirePermission('adjustments.validate')
   @Patch(':id/validate')
   @Auditable({ action: 'adjustments.validate', entity: 'Adjustment' })
   validate(
