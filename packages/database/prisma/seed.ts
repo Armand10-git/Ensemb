@@ -67,12 +67,14 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Transferts de stock
   { name: 'transfers.view', label: 'Voir les transferts' },
   { name: 'transfers.create', label: 'Créer un transfert' },
+  { name: 'transfers.validate', label: 'Valider un transfert (mouvemente le stock)' },
   { name: 'transfers.edit', label: 'Modifier un transfert' },
   { name: 'transfers.delete', label: 'Supprimer un transfert' },
 
   // Ajustements de stock
   { name: 'adjustments.view', label: 'Voir les ajustements' },
   { name: 'adjustments.create', label: 'Créer un ajustement' },
+  { name: 'adjustments.validate', label: 'Valider un ajustement (mouvemente le stock)' },
   { name: 'adjustments.edit', label: 'Modifier un ajustement' },
   { name: 'adjustments.delete', label: 'Supprimer un ajustement' },
 

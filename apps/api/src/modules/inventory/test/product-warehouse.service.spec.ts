@@ -69,6 +69,11 @@ describe('ProductWarehouseService', () => {
       },
       $transaction: jest.fn(),
     };
+    // Supporte les transactions interactives (fn) et les batchs (tableau de promises)
+    mock.$transaction.mockImplementation((arg: unknown) => {
+      if (typeof arg === 'function') return (arg as (tx: unknown) => unknown)(mock);
+      return Promise.all(arg as unknown[]);
+    });
 
     const module = await Test.createTestingModule({
       providers: [
@@ -117,6 +122,7 @@ describe('ProductWarehouseService', () => {
     prisma.warehouse.findUnique.mockResolvedValue({ organizationId: ORG_A, deletedAt: null });
 
     const existing = makeStock();
+    // findFirst est appelé à l'intérieur de la transaction — mock via prisma (tx === mock dans le setup)
     prisma.productWarehouse.findFirst.mockResolvedValue(existing);
 
     const result = await service.initStock(PROD_ID, WH_ID_1, ORG_A);
@@ -155,18 +161,33 @@ describe('ProductWarehouseService', () => {
     expect(summary.byWarehouse).toHaveLength(2);
   });
 
-  // ─── adjustStock : verrouillage optimiste ────────────────────────────────
+  // ─── adjustStock : verrouillage optimiste + IDOR ─────────────────────────
 
-  it('adjustStock : lève OptimisticLockException si version incorrecte', async () => {
+  it('adjustStock : lève ForbiddenException si productWarehouse appartient à une autre org', async () => {
     const txMock = {
       productWarehouse: {
-        findUnique: jest.fn().mockResolvedValue({ version: 2 }),
+        findUnique: jest.fn().mockResolvedValue({ version: 0, product: { organizationId: ORG_B } }),
         update: jest.fn(),
       },
     };
 
     await expect(
-      service.adjustStock(txMock as never, PW_ID, new Decimal('1'), 0),
+      service.adjustStock(txMock as never, PW_ID, ORG_A, new Decimal('1'), 0),
+    ).rejects.toThrow(ForbiddenException);
+
+    expect(txMock.productWarehouse.update).not.toHaveBeenCalled();
+  });
+
+  it('adjustStock : lève OptimisticLockException si version incorrecte', async () => {
+    const txMock = {
+      productWarehouse: {
+        findUnique: jest.fn().mockResolvedValue({ version: 2, product: { organizationId: ORG_A } }),
+        update: jest.fn(),
+      },
+    };
+
+    await expect(
+      service.adjustStock(txMock as never, PW_ID, ORG_A, new Decimal('1'), 0),
     ).rejects.toThrow(OptimisticLockException);
 
     expect(txMock.productWarehouse.update).not.toHaveBeenCalled();
@@ -184,12 +205,12 @@ describe('ProductWarehouseService', () => {
 
     const txMock = {
       productWarehouse: {
-        findUnique: jest.fn().mockResolvedValue({ version: 0 }),
+        findUnique: jest.fn().mockResolvedValue({ version: 0, product: { organizationId: ORG_A } }),
         update: jest.fn().mockResolvedValue(updated),
       },
     };
 
-    const result = await service.adjustStock(txMock as never, PW_ID, new Decimal('1'), 0);
+    const result = await service.adjustStock(txMock as never, PW_ID, ORG_A, new Decimal('1'), 0);
 
     expect(result.version).toBe(1);
     expect(txMock.productWarehouse.update).toHaveBeenCalledWith(

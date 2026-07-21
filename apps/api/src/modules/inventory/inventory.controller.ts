@@ -30,8 +30,8 @@ const InitStockSchema = z.object({
   quantity: z
     .string()
     .optional()
-    .refine((v) => v === undefined || !isNaN(Number(v)), {
-      message: 'quantity doit être un nombre valide.',
+    .refine((v) => v === undefined || (!isNaN(Number(v)) && Number(v) >= 0), {
+      message: 'quantity doit être un nombre positif ou nul.',
     }),
 });
 
@@ -59,6 +59,20 @@ export class InventoryController {
     @Req() req: AuthenticatedRequest,
   ) {
     return this.productWarehouseService.findByProduct(productId, req.user.organizationId);
+  }
+
+  /**
+   * Retourne le résumé de stock d'un produit : total + détail par entrepôt.
+   * Le total est calculé côté serveur en Decimal (§17 point A).
+   * GET /api/v1/inventory/stock/summary/:productId
+   */
+  @Get('summary/:productId')
+  @RequirePermission('adjustments.view')
+  getStockSummary(
+    @Param('productId', ParseUUIDPipe) productId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.productWarehouseService.getStockSummary(productId, req.user.organizationId);
   }
 
   /**

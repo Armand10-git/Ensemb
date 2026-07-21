@@ -178,10 +178,17 @@ interface StockEntry {
   quantity: string;
 }
 
-function useProductStock(productId: string, enabled: boolean) {
-  return useQuery<StockEntry[]>({
-    queryKey: ['product-stock', productId],
-    queryFn: () => api.get<StockEntry[]>(`/inventory/stock/product/${productId}`),
+interface StockSummary {
+  productId: string;
+  /** Total calculé côté serveur en Decimal — affiché directement, jamais recalculé en JS. */
+  totalQuantity: string;
+  byWarehouse: StockEntry[];
+}
+
+function useProductStockSummary(productId: string, enabled: boolean) {
+  return useQuery<StockSummary>({
+    queryKey: ['product-stock-summary', productId],
+    queryFn: () => api.get<StockSummary>(`/inventory/stock/summary/${productId}`),
     enabled,
     staleTime: 30_000,
   });
@@ -190,7 +197,7 @@ function useProductStock(productId: string, enabled: boolean) {
 function StockPopover({ productId }: { productId: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { data, isLoading, isError } = useProductStock(productId, open);
+  const { data, isLoading, isError } = useProductStockSummary(productId, open);
 
   // Fermer au clic extérieur
   useEffect(() => {
@@ -202,10 +209,6 @@ function StockPopover({ productId }: { productId: string }) {
     return () => document.removeEventListener('mousedown', handle);
   }, [open]);
 
-  const total = data
-    ? data.reduce((s, e) => s + parseFloat(e.quantity), 0)
-    : null;
-
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -213,8 +216,8 @@ function StockPopover({ productId }: { productId: string }) {
         className="rounded px-2 py-0.5 text-xs font-medium text-slate-300 hover:bg-white/10 focus:outline-none"
         aria-label="Voir le stock par entrepôt"
       >
-        {total !== null
-          ? <span className="tabular-nums">{total.toLocaleString('fr-CM', { maximumFractionDigits: 3 })}</span>
+        {data
+          ? <span className="tabular-nums">{parseFloat(data.totalQuantity).toLocaleString('fr-CM', { maximumFractionDigits: 3 })}</span>
           : <span className="text-slate-500">Stock</span>}
       </button>
 
@@ -233,12 +236,12 @@ function StockPopover({ productId }: { productId: string }) {
           {isError && (
             <p className="text-xs text-red-400">Erreur de chargement.</p>
           )}
-          {!isLoading && !isError && data && data.length === 0 && (
+          {!isLoading && !isError && data && data.byWarehouse.length === 0 && (
             <p className="text-xs text-slate-500">Aucun stock initialisé.</p>
           )}
-          {!isLoading && !isError && data && data.length > 0 && (
+          {!isLoading && !isError && data && data.byWarehouse.length > 0 && (
             <ul className="space-y-1">
-              {data.map((e) => (
+              {data.byWarehouse.map((e) => (
                 <li key={e.id} className="flex items-center justify-between gap-4">
                   <span className="truncate text-xs text-slate-300">{e.warehouseName}</span>
                   <span className="tabular-nums text-xs font-medium text-white">

@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { Decimal } from '@prisma/client/runtime/library';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
@@ -187,27 +188,33 @@ export class ProductWarehouseService {
     }
 
     // Upsert sans variante (productVariantId IS NULL) — index partiel SQL garantit l'unicité.
-    // On ne peut pas utiliser un connectOrCreate sur un index partiel, donc findFirst + create.
-    const existing = await this.prisma.productWarehouse.findFirst({
-      where: { productId, warehouseId, productVariantId: null },
-      select: STOCK_SELECT,
-    });
+    // findFirst + create dans une transaction pour éviter la race condition inter-threads.
+    // En cas de conflit P2002 (violation unique concurrent), on retourne l'enregistrement gagnant.
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.productWarehouse.findFirst({
+          where: { productId, warehouseId, productVariantId: null },
+          select: STOCK_SELECT,
+        });
+        if (existing) return toStockEntry(existing);
 
-    if (existing) {
-      return toStockEntry(existing);
+        const created = await tx.productWarehouse.create({
+          data: { productId, warehouseId, quantity: quantity ?? new Decimal(0), version: 0 },
+          select: STOCK_SELECT,
+        });
+        return toStockEntry(created);
+      });
+    } catch (e) {
+      if (e instanceof PrismaClientKnownRequestError && e.code === 'P2002') {
+        const row = await this.prisma.productWarehouse.findFirst({
+          where: { productId, warehouseId, productVariantId: null },
+          select: STOCK_SELECT,
+        });
+        if (!row) throw e;
+        return toStockEntry(row);
+      }
+      throw e;
     }
-
-    const created = await this.prisma.productWarehouse.create({
-      data: {
-        productId,
-        warehouseId,
-        quantity: quantity ?? new Decimal(0),
-        version: 0,
-      },
-      select: STOCK_SELECT,
-    });
-
-    return toStockEntry(created);
   }
 
   /**
@@ -249,11 +256,14 @@ export class ProductWarehouseService {
    *
    * NON exposé via HTTP — à appeler depuis une transaction Serializable (POS, ajustement S21).
    *
+   * @param organizationId — requis pour la vérification IDOR (l'appelant passe son tenant).
    * @throws OptimisticLockException si la version en base diffère de expectedVersion.
+   * @throws ForbiddenException si le ProductWarehouse n'appartient pas à organizationId.
    */
   async adjustStock(
     tx: Prisma.TransactionClient,
     productWarehouseId: string,
+    organizationId: string,
     delta: Decimal,
     expectedVersion: number,
   ): Promise<{
@@ -266,11 +276,15 @@ export class ProductWarehouseService {
   }> {
     const current = await tx.productWarehouse.findUnique({
       where: { id: productWarehouseId },
-      select: { version: true },
+      select: { version: true, product: { select: { organizationId: true } } },
     });
 
     if (!current) {
       throw new NotFoundException('Stock introuvable.');
+    }
+
+    if (current.product.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
     }
 
     if (current.version !== expectedVersion) {

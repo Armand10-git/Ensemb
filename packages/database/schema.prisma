@@ -200,6 +200,8 @@ model Organization {
   clients          Client[]
   providers        Provider[]
   documentCounters DocumentCounter[]
+  adjustments      Adjustment[]
+  transfers        StockTransfer[]
 
   @@map("organizations")
 }
@@ -276,6 +278,8 @@ model User {
 
   organization Organization  @relation(fields: [organizationId], references: [id])
   roles        RoleOnUser[]
+  adjustments  Adjustment[]
+  transfers    StockTransfer[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -399,10 +403,13 @@ model Warehouse {
   /// Compteur de version pour le verrouillage optimiste sur les mouvements de stock (S15)
   version        Int          @default(0)
   deletedAt      DateTime?
-  organization   Organization     @relation(fields: [organizationId], references: [id])
-  stocks         ProductWarehouse[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  organization    Organization      @relation(fields: [organizationId], references: [id])
+  stocks          ProductWarehouse[]
+  adjustments     Adjustment[]
+  transfersFrom   StockTransfer[]   @relation("TransferFrom")
+  transfersTo     StockTransfer[]   @relation("TransferTo")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   @@index([organizationId])
   @@map("warehouses")
@@ -493,8 +500,10 @@ model Product {
   unit           Unit?            @relation("ProductUnit", fields: [unitId], references: [id])
   unitSale       Unit?            @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
   unitPurchase   Unit?            @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
-  variants       ProductVariant[]
-  stocks         ProductWarehouse[]
+  variants           ProductVariant[]
+  stocks             ProductWarehouse[]
+  adjustmentDetails  AdjustmentDetail[]
+  transferDetails    StockTransferDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -649,4 +658,126 @@ model DocumentCounter {
 
   @@id([organizationId, documentType, year])
   @@map("document_counters")
+}
+
+// ─── Ajustements de stock (S16 — Bloc D) ─────────────────────────────────────
+
+/// Statut d'un ajustement de stock.
+/// DRAFT = brouillon (pas encore appliqué au stock).
+/// VALIDATED = appliqué — immuable, ni modification ni suppression physique possible.
+enum AdjustmentStatus {
+  DRAFT
+  VALIDATED
+}
+
+/// Sens du mouvement d'une ligne d'ajustement.
+enum AdjustmentDetailType {
+  ADDITION
+  SOUSTRACTION
+}
+
+/// En-tête d'un ajustement de stock (S16 — Bloc D).
+/// Patron identique à Sale/SaleDetail : l'organizationId est sur l'en-tête uniquement.
+/// reference générée via DocumentCounterService.nextReference dans la transaction de création (§17 point X).
+/// Soft delete uniquement (deletedAt) — un ajustement validé ne peut être ni modifié ni supprimé (§17 point 7).
+model Adjustment {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "ADJ-2026-000001")
+  reference      String
+  date           DateTime
+  warehouseId    String           @db.Uuid
+  userId         String           @db.Uuid
+  note           String?
+  status         AdjustmentStatus @default(DRAFT)
+  deletedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id])
+  user         User               @relation(fields: [userId], references: [id])
+  details      AdjustmentDetail[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@map("adjustments")
+}
+
+/// Ligne d'un ajustement de stock (S16 — Bloc D).
+/// quantity et unitCost en Decimal — jamais Float (§17 point A).
+/// L'organizationId n'est pas répété ici — hérité via adjustment.organizationId.
+model AdjustmentDetail {
+  id               String               @id @default(uuid()) @db.Uuid
+  adjustmentId     String               @db.Uuid
+  productId        String               @db.Uuid
+  productVariantId String?              @db.Uuid
+  type             AdjustmentDetailType
+  /// Quantité ajustée — Decimal obligatoire (§17 point A), toujours positive
+  quantity         Decimal              @db.Decimal(14, 3)
+  /// Coût unitaire pour valorisation — Decimal obligatoire (§17 point A)
+  unitCost         Decimal              @default(0) @db.Decimal(14, 3)
+
+  adjustment Adjustment     @relation(fields: [adjustmentId], references: [id])
+  product    Product        @relation(fields: [productId], references: [id])
+
+  @@map("adjustment_details")
+}
+
+// ─── Transferts de stock entre entrepôts (S17 — Bloc D) ──────────────────────
+
+/// Statut d'un transfert de stock.
+/// DRAFT = brouillon (pas encore appliqué au stock).
+/// VALIDATED = appliqué — immuable, ni modification ni suppression physique possible.
+enum TransferStatus {
+  DRAFT
+  VALIDATED
+}
+
+/// En-tête d'un transfert de stock (S17 — Bloc D).
+/// Patron identique à Sale/SaleDetail : organizationId sur l'en-tête uniquement.
+/// reference générée via DocumentCounterService.nextReference (§17 point X) — format TRF-YYYY-NNNNNN.
+/// Atomicité : validation décrémente fromWarehouse ET incrémente toWarehouse dans la même transaction.
+/// Soft delete uniquement (deletedAt) — un transfert validé ne peut être ni modifié ni supprimé (§17 point 7).
+model StockTransfer {
+  id              String         @id @default(uuid()) @db.Uuid
+  organizationId  String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "TRF-2026-000001")
+  reference       String
+  date            DateTime
+  fromWarehouseId String         @db.Uuid
+  toWarehouseId   String         @db.Uuid
+  userId          String         @db.Uuid
+  note            String?
+  status          TransferStatus @default(DRAFT)
+  deletedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  organization  Organization        @relation(fields: [organizationId], references: [id])
+  fromWarehouse Warehouse           @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse           @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  user          User                @relation(fields: [userId], references: [id])
+  details       StockTransferDetail[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@map("stock_transfers")
+}
+
+/// Ligne d'un transfert de stock (S17 — Bloc D).
+/// quantity en Decimal — jamais Float (§17 point A).
+/// L'organizationId n'est pas répété ici — hérité via transfer.organizationId.
+model StockTransferDetail {
+  id               String        @id @default(uuid()) @db.Uuid
+  transferId       String        @db.Uuid
+  productId        String        @db.Uuid
+  productVariantId String?       @db.Uuid
+  /// Quantité transférée — Decimal obligatoire (§17 point A), toujours positive
+  quantity         Decimal       @db.Decimal(14, 3)
+
+  transfer StockTransfer  @relation(fields: [transferId], references: [id])
+  product  Product        @relation(fields: [productId], references: [id])
+
+  @@map("stock_transfer_details")
 }
