@@ -53,6 +53,9 @@ jobs:
       # Génère le client Prisma (types nécessaires pour tsc)
       - run: pnpm --filter @ensemb/database run db:generate
 
+      # Compile @ensemb/utils (formatReference, DocumentType importés par l'API)
+      - run: pnpm --filter @ensemb/utils run build
+
       - run: pnpm typecheck
 
   test-unit:
@@ -76,6 +79,9 @@ jobs:
       # Génère le client Prisma (types et binaire nécessaires pour ts-jest)
       - run: pnpm --filter @ensemb/database run db:generate
 
+      # Compile @ensemb/utils (formatReference, DocumentType importés par l'API)
+      - run: pnpm --filter @ensemb/utils run build
+
       - run: pnpm test:unit
 
   build:
@@ -98,5 +104,8 @@ jobs:
 
       # Génère le client Prisma avant la compilation TypeScript de l'API
       - run: pnpm --filter @ensemb/database run db:generate
+
+      # Compile @ensemb/utils (formatReference, DocumentType importés par l'API)
+      - run: pnpm --filter @ensemb/utils run build
 
       - run: pnpm build

@@ -53,6 +53,7 @@ let prisma: PrismaClient;
 let orgAId: string, orgBId: string;
 let tokenA: string, tokenB: string;
 let catAId: string, catBId: string;
+let uploadedKey: string;
 
 const PRODUCT_PERMS = [
   'products.view', 'products.create', 'products.edit', 'products.delete',
@@ -137,6 +138,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+
+  if (uploadedKey) await mockStorage.delete(uploadedKey);
 
   await prisma.productVariant.deleteMany({ where: { product: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.product.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });

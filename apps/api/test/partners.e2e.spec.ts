@@ -25,8 +25,9 @@ jest.setTimeout(60_000);
 
 // ─── Données de test ──────────────────────────────────────────────────────────
 
-const SUBDOMAIN_A = `e2e-partners-a-${Date.now()}`;
-const SUBDOMAIN_B = `e2e-partners-b-${Date.now()}`;
+const SUFFIX = Date.now();
+const SUBDOMAIN_A = `e2e-partners-a-${SUFFIX}`;
+const SUBDOMAIN_B = `e2e-partners-b-${SUFFIX}`;
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -77,7 +78,7 @@ beforeAll(async () => {
     data: {
       organizationId: orgAId,
       firstname: 'User', lastname: 'A',
-      email: 'userA@e2e.cm', username: 'userA',
+      email: `userA-${SUFFIX}@e2e.cm`, username: `userA-${SUFFIX}`,
       password: await bcrypt.hash('Pass@1234!', 12),
       isActive: true,
     },
@@ -95,7 +96,7 @@ beforeAll(async () => {
     data: {
       organizationId: orgBId,
       firstname: 'User', lastname: 'B',
-      email: 'userB@e2e.cm', username: 'userB',
+      email: `userB-${SUFFIX}@e2e.cm`, username: `userB-${SUFFIX}`,
       password: await bcrypt.hash('Pass@1234!', 12),
       isActive: true,
     },
@@ -131,13 +132,13 @@ beforeAll(async () => {
   // Login org A
   const resA = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
-    .send({ email: 'userA@e2e.cm', password: 'Pass@1234!' });
+    .send({ email: `userA-${SUFFIX}@e2e.cm`, password: 'Pass@1234!' });
   tokenA = (resA.body as { accessToken: string }).accessToken;
 
   // Login org B
   const resB = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
-    .send({ email: 'userB@e2e.cm', password: 'Pass@1234!' });
+    .send({ email: `userB-${SUFFIX}@e2e.cm`, password: 'Pass@1234!' });
   tokenB = (resB.body as { accessToken: string }).accessToken;
 });
 
