@@ -186,19 +186,20 @@ model Organization {
   createdAt         DateTime  @default(now())
   deletedAt         DateTime?
 
-  users         User[]
-  roles         Role[]
-  subscription  Subscription?
-  invoices      Invoice[]
-  smtpServer    SmtpServer?
-  backupExports BackupExport[]
-  warehouses    Warehouse[]
-  categories    Category[]
-  brands        Brand[]
-  units         Unit[]
-  products      Product[]
-  clients       Client[]
-  providers     Provider[]
+  users            User[]
+  roles            Role[]
+  subscription     Subscription?
+  invoices         Invoice[]
+  smtpServer       SmtpServer?
+  backupExports    BackupExport[]
+  warehouses       Warehouse[]
+  categories       Category[]
+  brands           Brand[]
+  units            Unit[]
+  products         Product[]
+  clients          Client[]
+  providers        Provider[]
+  documentCounters DocumentCounter[]
 
   @@map("organizations")
 }
@@ -620,4 +621,32 @@ model Provider {
 
   @@unique([organizationId, code])
   @@map("providers")
+}
+
+// ─── Génération transactionnelle des références de documents (§17 point X) ──
+
+/// Types de documents financiers générant une référence séquentielle.
+enum DocumentType {
+  SALE
+  PURCHASE
+  QUOTATION
+  SALE_RETURN
+  PURCHASE_RETURN
+  TRANSFER
+  ADJUSTMENT
+}
+
+/// Compteur de référence par (organisation, type de document, année civile).
+/// Incrémenté dans la même transaction que la création du document (SELECT … FOR UPDATE ou upsert+increment).
+/// Jamais de MAX(reference)+1 applicatif — source de collision en concurrence (§17 point X).
+model DocumentCounter {
+  organizationId String       @db.Uuid
+  documentType   DocumentType
+  year           Int
+  /// Dernier compteur utilisé — incrémenté atomiquement dans la transaction de création.
+  lastCounter    Int          @default(0)
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@id([organizationId, documentType, year])
+  @@map("document_counters")
 }

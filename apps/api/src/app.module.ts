@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './common/prisma.module';
 import { RedisModule } from './common/redis.module';
 import { EncryptionModule } from './common/encryption.module';
+import { DocumentCounterModule } from './common/document-counter.module';
 import { TenancyModule } from './tenancy/tenancy.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -22,6 +23,7 @@ import { WarehouseModule } from './modules/warehouse/warehouse.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { PartnersModule } from './modules/partners/partners.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
 
 @Module({
   imports: [
@@ -38,6 +40,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     PrismaModule,
     RedisModule,
     EncryptionModule,
+    DocumentCounterModule,
     TenancyModule,
     HealthModule,
     AuthModule,
@@ -55,6 +58,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     CatalogModule,
     PartnersModule,
     UploadsModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

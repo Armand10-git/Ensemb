@@ -36,7 +36,7 @@
 
 ### P2 — Modèle de données
 - [x] Schéma Prisma `User`, `Role`, `Permission`, `RoleOnUser`, `PermissionOnRole`, `AuditLog` (§4) + migrations — S04 ✅ (schéma complet métier à compléter en Bloc C+)
-- [ ] Index composites `(organizationId, …)` et index uniques partiels (`WHERE deleted_at IS NULL`) posés dans la migration initiale (§4) ; table `DocumentCounter` pour la génération transactionnelle des références de documents (§17, point X) — S15b
+- [x] Index composites `(organizationId, …)` et index uniques partiels (`WHERE deleted_at IS NULL`) posés dans la migration initiale (§4) ; table `DocumentCounter` pour la génération transactionnelle des références de documents (§17, point X) — S15b ✅
 - [x] Seed : catalogue des permissions (108 droits), rôle Administrateur complet, utilisateur admin — S05 ✅ (client "walk-in", devise et entrepôt par défaut : S09+)
 
 ### P3 — Référentiels

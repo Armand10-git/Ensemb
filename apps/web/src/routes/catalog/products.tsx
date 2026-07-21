@@ -170,6 +170,90 @@ function useUploadImage() {
   });
 }
 
+// ─── Stock lazy par produit (S15) ─────────────────────────────────────────────
+
+interface StockEntry {
+  id: string;
+  warehouseName: string;
+  quantity: string;
+}
+
+function useProductStock(productId: string, enabled: boolean) {
+  return useQuery<StockEntry[]>({
+    queryKey: ['product-stock', productId],
+    queryFn: () => api.get<StockEntry[]>(`/inventory/stock/product/${productId}`),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+function StockPopover({ productId }: { productId: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const { data, isLoading, isError } = useProductStock(productId, open);
+
+  // Fermer au clic extérieur
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+
+  const total = data
+    ? data.reduce((s, e) => s + parseFloat(e.quantity), 0)
+    : null;
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rounded px-2 py-0.5 text-xs font-medium text-slate-300 hover:bg-white/10 focus:outline-none"
+        aria-label="Voir le stock par entrepôt"
+      >
+        {total !== null
+          ? <span className="tabular-nums">{total.toLocaleString('fr-CM', { maximumFractionDigits: 3 })}</span>
+          : <span className="text-slate-500">Stock</span>}
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-[200px] rounded-xl border border-white/10 bg-[#0d1635] p-3 shadow-xl">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Stock par entrepôt
+          </p>
+          {isLoading && (
+            <div className="space-y-1.5">
+              {[1, 2].map((i) => (
+                <div key={i} className="h-3 animate-pulse rounded bg-white/10" />
+              ))}
+            </div>
+          )}
+          {isError && (
+            <p className="text-xs text-red-400">Erreur de chargement.</p>
+          )}
+          {!isLoading && !isError && data && data.length === 0 && (
+            <p className="text-xs text-slate-500">Aucun stock initialisé.</p>
+          )}
+          {!isLoading && !isError && data && data.length > 0 && (
+            <ul className="space-y-1">
+              {data.map((e) => (
+                <li key={e.id} className="flex items-center justify-between gap-4">
+                  <span className="truncate text-xs text-slate-300">{e.warehouseName}</span>
+                  <span className="tabular-nums text-xs font-medium text-white">
+                    {parseFloat(e.quantity).toLocaleString('fr-CM', { maximumFractionDigits: 3 })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Composants réutilisables ─────────────────────────────────────────────────
 
 function SkeletonRow({ cols }: { cols: number }) {
@@ -897,8 +981,8 @@ export function ProductsPage() {
                   <td className="px-4 py-3 font-mono text-right text-slate-200 tabular-nums">
                     {formatXAF(product.price)}
                   </td>
-                  <td className="px-4 py-3 text-slate-500">
-                    — {/* S15 */}
+                  <td className="px-4 py-3">
+                    <StockPopover productId={product.id} />
                   </td>
                   <td className="px-4 py-3">
                     <ActiveBadge active={product.isActive} />
