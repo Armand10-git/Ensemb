@@ -287,7 +287,14 @@ describe('DELETE /api/v1/catalog/categories/:id', () => {
 
     // Créer un produit stub associé à cette catégorie
     await prisma.product.create({
-      data: { organizationId: orgAId, categoryId: catId },
+      data: {
+        organizationId: orgAId,
+        categoryId: catId,
+        code: `STUB-${SUFFIX}`,
+        name: `StubProduct-${SUFFIX}`,
+        cost: '0',
+        price: '0',
+      },
     });
 
     const res = await supertest(app.getHttpServer())
