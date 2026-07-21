@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -14,6 +15,9 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { TransferStatus } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/guards/permission.guard';
@@ -61,6 +65,13 @@ export class StockTransferController {
     @Query('toWarehouseId') toWarehouseId?: string,
     @Query('status') status?: string,
   ) {
+    if (fromWarehouseId !== undefined && !UUID_RE.test(fromWarehouseId)) {
+      throw new BadRequestException('fromWarehouseId doit être un UUID valide.');
+    }
+    if (toWarehouseId !== undefined && !UUID_RE.test(toWarehouseId)) {
+      throw new BadRequestException('toWarehouseId doit être un UUID valide.');
+    }
+
     const { page: p, limit: l } = parsePagination(page, limit);
     const validStatus =
       status === 'DRAFT' || status === 'VALIDATED'

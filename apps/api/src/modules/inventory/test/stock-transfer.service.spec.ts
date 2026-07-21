@@ -200,7 +200,7 @@ describe('StockTransferService', () => {
     const trf = makeTransfer();
     prisma.stockTransfer.findUnique.mockResolvedValue(trf);
 
-    const pwFrom = { id: PW_FROM_ID, version: 0, product: { name: 'Prod', stockAlert: 0 } };
+    const pwFrom = { id: PW_FROM_ID, version: 0, quantity: new Decimal('10'), product: { name: 'Prod', stockAlert: 0 } };
     const pwTo   = { id: PW_TO_ID,   version: 0 };
 
     prisma.productWarehouse.findFirst
@@ -236,7 +236,7 @@ describe('StockTransferService', () => {
     prisma.stockTransfer.findUnique.mockResolvedValue(trf);
 
     prisma.productWarehouse.findFirst
-      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, product: { name: 'P', stockAlert: 0 } })
+      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, quantity: new Decimal('10'), product: { name: 'P', stockAlert: 0 } })
       .mockResolvedValueOnce({ id: PW_TO_ID, version: 0 });
 
     pwService.adjustStock
@@ -259,7 +259,7 @@ describe('StockTransferService', () => {
     prisma.stockTransfer.findUnique.mockResolvedValue(trf);
 
     prisma.productWarehouse.findFirst
-      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, product: { name: 'Prod X', stockAlert: 10 } })
+      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, quantity: new Decimal('10'), product: { name: 'Prod X', stockAlert: 10 } })
       .mockResolvedValueOnce({ id: PW_TO_ID, version: 0 });
 
     // Après décrémentation, il reste 3 (< seuil 10) → lowAlert
@@ -280,7 +280,7 @@ describe('StockTransferService', () => {
     prisma.stockTransfer.findUnique.mockResolvedValue(trf);
 
     prisma.productWarehouse.findFirst
-      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, product: { name: 'P', stockAlert: 0 } })
+      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, quantity: new Decimal('10'), product: { name: 'P', stockAlert: 0 } })
       .mockResolvedValueOnce({ id: PW_TO_ID, version: 0 });
 
     pwService.adjustStock.mockRejectedValueOnce(new OptimisticLockException(PW_FROM_ID, 0, 1));
@@ -293,7 +293,7 @@ describe('StockTransferService', () => {
     prisma.stockTransfer.findUnique.mockResolvedValue(trf);
 
     prisma.productWarehouse.findFirst
-      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, product: { name: 'P', stockAlert: 0 } })
+      .mockResolvedValueOnce({ id: PW_FROM_ID, version: 0, quantity: new Decimal('10'), product: { name: 'P', stockAlert: 0 } })
       .mockResolvedValueOnce({ id: PW_TO_ID, version: 0 });
 
     pwService.adjustStock

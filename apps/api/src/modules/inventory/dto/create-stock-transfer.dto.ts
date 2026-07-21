@@ -34,10 +34,11 @@ export const CreateStockTransferSchema = z.object({
   /** Note libre, max 500 caractères. */
   note: z.string().max(500, 'La note ne peut pas dépasser 500 caractères').optional(),
 
-  /** Lignes du transfert — au moins une ligne requise. */
+  /** Lignes du transfert — entre 1 et 100 lignes. */
   details: z
     .array(StockTransferDetailSchema)
-    .min(1, 'Le transfert doit comporter au moins une ligne'),
+    .min(1, 'Le transfert doit comporter au moins une ligne')
+    .max(100, 'Le transfert ne peut pas comporter plus de 100 lignes'),
 });
 
 export type CreateStockTransferDto = z.infer<typeof CreateStockTransferSchema>;
