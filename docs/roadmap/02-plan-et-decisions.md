@@ -48,7 +48,7 @@
 - [x] CRUD produit + variantes + code-barres, avec choix du format de papier pour l'impression d'étiquettes — S14 ✅
 - [ ] `InventoryModule` : stock par entrepôt, ajustements, transferts, événement `stock:updated`
 - [ ] Champ `ProductWarehouse.version` posé dès la migration initiale (§17, point B), même si le verrouillage n'est exploité qu'en P5
-- [ ] Alerte de stock bas → événement `stock:lowAlert` **et** persistance dans `Notification` (§17, point I)
+- [x] Alerte de stock bas → événement `stock:lowAlert` **et** persistance dans `Notification` (§17, point I) — S18 ✅
 - [ ] Décision explicite : le stock peut-il devenir négatif (back-order) ou la vente est-elle bloquée à zéro ? (§17, point G)
 
 ### P5 — Ventes & POS
@@ -281,7 +281,7 @@ Décisions transverses qui s'appliquent à plusieurs sections du document, regro
 | F | Fuseaux horaires | Dates stockées en UTC, `Setting.timezone` (défaut `Africa/Douala`), affichage localisé côté client | §4, §14, checklist §15 |
 | G | Stock négatif | À confirmer explicitement avant P5 (par défaut : bloqué à zéro) | §14, P4 |
 | H | Installation & mise à jour | Pas d'assistant web dédié : seed + pipeline CI/CD (§12) ; à reconsidérer si une distribution en marque blanche est envisagée | §12, §14 |
-| I | Notifications | Modèle `Notification` persistant, consultable à la reconnexion | §4, §14 |
+| I | Notifications | Modèle `Notification` persistant, consultable à la reconnexion — **implémenté S18** ✅ | §4, §14 |
 | J | Entrepôt par défaut | À trancher en P5 : `Setting.defaultWarehouseId` global ou sélection par session de caisse | P5 |
 | K | Tests | Taxonomie unitaire/intégration/e2e + infra Postgres de test + DoD générique appliquée à toute session | §12.2, §16, §19 |
 | L | Outillage | Manifeste de dépendances + stratégie de factories/tests | §16 |

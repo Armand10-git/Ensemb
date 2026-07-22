@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -10,6 +11,7 @@ import { DocumentType, Prisma, TransferStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { NotificationService } from '../notifications/notification.service';
 import { ProductWarehouseService, OptimisticLockException } from './product-warehouse.service';
 import type { CreateStockTransferDto } from './dto/create-stock-transfer.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -81,11 +83,14 @@ const DETAIL_SELECT = {
  */
 @Injectable()
 export class StockTransferService {
+  private readonly logger = new Logger(StockTransferService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly documentCounter: DocumentCounterService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly productWarehouseService: ProductWarehouseService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -390,7 +395,23 @@ export class StockTransferService {
             currentQuantity: update.newQuantityFrom,
             threshold: update.stockAlert,
           });
-        // TODO S18: persister dans Notification
+        // Persiste l'alerte pour les utilisateurs hors-ligne (§17 point I — S18)
+        this.notificationService
+          .createForOrg(
+            organizationId,
+            'stock.lowAlert',
+            {
+              productId: update.productId,
+              productName: update.productName,
+              currentQuantity: update.newQuantityFrom.toString(),
+              threshold: update.stockAlert,
+              warehouseId: capturedFromWarehouseId,
+            },
+            'reports.quantityAlerts',
+          )
+          .catch((err: unknown) => {
+            this.logger.error('Erreur création notification stock.lowAlert (transfert)', err);
+          });
       }
     }
 
