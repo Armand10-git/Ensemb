@@ -17,13 +17,14 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { WarehouseModule } from '../src/modules/warehouse/warehouse.module';
 import { CurrencyModule } from '../src/modules/currency/currency.module';
 
@@ -34,7 +35,7 @@ const ORG_A_SUBDOMAIN = `e2e-wh-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-wh-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -43,8 +44,6 @@ let tokenB: string;
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   // Créer deux orgs de test
   const orgA = await prisma.organization.create({ data: { name: 'E2E Org A', subdomain: ORG_A_SUBDOMAIN } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Org B', subdomain: ORG_B_SUBDOMAIN } });
@@ -95,6 +94,7 @@ beforeAll(async () => {
       RedisModule,
       AuditModule,
       AuthModule,
+      TenancyModule,
       WarehouseModule,
       CurrencyModule,
     ],
@@ -127,7 +127,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -137,6 +136,7 @@ describe('POST /api/v1/warehouses', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Entrepôt A - ${SUFFIX}`, address: '1 rue Test', isDefault: true });
 
     expect(res.status).toBe(201);
@@ -149,11 +149,13 @@ describe('POST /api/v1/warehouses', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, isDefault: false });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, isDefault: false });
 
     expect(res.status).toBe(409);
@@ -164,11 +166,13 @@ describe('POST /api/v1/warehouses', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, isDefault: false });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name, isDefault: false });
 
     expect(res.status).toBe(201);
@@ -177,6 +181,7 @@ describe('POST /api/v1/warehouses', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Test', isDefault: false });
     expect(res.status).toBe(401);
   });
@@ -186,7 +191,8 @@ describe('GET /api/v1/warehouses', () => {
   it("200 — ne retourne que les entrepôts de l'org du tenant", async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/warehouses')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
@@ -207,6 +213,7 @@ describe('GET /api/v1/warehouses/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Detail-${SUFFIX}`, isDefault: false });
     whId = (res.body as { id: string }).id;
   });
@@ -214,7 +221,8 @@ describe('GET /api/v1/warehouses/:id', () => {
   it("200 — retourne l'entrepôt de l'org", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/warehouses/${whId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(whId);
   });
@@ -222,7 +230,8 @@ describe('GET /api/v1/warehouses/:id', () => {
   it('404 ou 403 — un autre tenant ne peut pas voir cet entrepôt', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/warehouses/${whId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
     expect([403, 404]).toContain(res.status);
   });
 });
@@ -234,6 +243,7 @@ describe('PATCH /api/v1/warehouses/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Update-${SUFFIX}`, isDefault: false });
     whId = (res.body as { id: string }).id;
   });
@@ -242,6 +252,7 @@ describe('PATCH /api/v1/warehouses/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/warehouses/${whId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Updated-${SUFFIX}` });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe(`Updated-${SUFFIX}`);
@@ -251,6 +262,7 @@ describe('PATCH /api/v1/warehouses/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/warehouses/${whId}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name: 'Hack' });
     expect([403, 404]).toContain(res.status);
   });
@@ -290,12 +302,14 @@ describe('DELETE /api/v1/warehouses/:id', () => {
     const createRes = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenSingle}`)
+      .set('X-Organization-Id', orgSingle.id)
       .send({ name: 'Unique WH', isDefault: true });
     const singleWhId = (createRes.body as { id: string }).id;
 
     const delRes = await supertest(app.getHttpServer())
       .delete(`/api/v1/warehouses/${singleWhId}`)
-      .set('Authorization', `Bearer ${tokenSingle}`);
+      .set('Authorization', `Bearer ${tokenSingle}`)
+      .set('X-Organization-Id', orgSingle.id);
 
     expect(delRes.status).toBe(400);
     expect(delRes.body.message).toMatch(/seul entrepôt/i);
@@ -314,18 +328,21 @@ describe('DELETE /api/v1/warehouses/:id', () => {
     const whSecond = await supertest(app.getHttpServer())
       .post('/api/v1/warehouses')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `ToDelete-${SUFFIX}`, isDefault: false });
     const whId = (whSecond.body as { id: string }).id;
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/warehouses/${whId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     // L'entrepôt soft-deleted ne doit plus apparaître dans la liste
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/warehouses')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (list.body.data as { id: string }[]).map((w) => w.id);
     expect(ids).not.toContain(whId);
   });

@@ -70,10 +70,11 @@ export class PlatformAdminDashboardService {
       atRiskCount,
     ] = await Promise.all([
       // MRR : SUM SQL sur les plans des abonnements ACTIVE — évite de charger toutes les lignes en mémoire
+      // Colonnes entre guillemets car Prisma génère des noms camelCase en PostgreSQL
       this.prisma.$queryRaw<Array<{ mrr: string }>>`
-        SELECT COALESCE(SUM(p.price_monthly), 0)::text AS mrr
+        SELECT COALESCE(SUM(p."priceMonthly"), 0)::text AS mrr
         FROM subscriptions s
-        JOIN plans p ON s.plan_id = p.id
+        JOIN plans p ON s."planId" = p.id
         WHERE s.status = 'ACTIVE'
       `,
       this.prisma.subscription.count({ where: { status: 'ACTIVE' } }),

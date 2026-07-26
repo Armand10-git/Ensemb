@@ -10,10 +10,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit(): void {
-    this.client = new Redis({
-      host: this.config.get<string>('REDIS_HOST', 'localhost'),
-      port: this.config.get<number>('REDIS_PORT', 6379),
-    });
+    const redisUrl = this.config.get<string>('REDIS_URL');
+    this.client = redisUrl
+      ? new Redis(redisUrl)
+      : new Redis({
+          host: this.config.get<string>('REDIS_HOST', 'localhost'),
+          port: this.config.get<number>('REDIS_PORT', 6379),
+        });
 
     this.client.on('error', (err: Error) => {
       this.logger.error('Erreur de connexion Redis', err.message);
@@ -21,7 +24,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.client.quit();
+    // En tests Jest (forceExit:true), le processus se termine par RST — pas de TIME_WAIT.
+    if (!process.env['JEST_WORKER_ID']) {
+      await this.client.quit();
+    }
   }
 
   async set(key: string, value: string, ttlSeconds: number): Promise<void> {

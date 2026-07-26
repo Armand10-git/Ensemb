@@ -16,10 +16,12 @@ import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaModule } from '../src/common/prisma.module';
+import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { PrismaService } from '../src/common/prisma.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 const PREFIX = `t07-wh-${Date.now()}`;
 const TEST_JWT_SECRET = 'test-jwt-secret-t07-webhook';
@@ -52,7 +54,9 @@ describe('BillingModule webhook (e2e)', () => {
         PassportModule,
         JwtModule.register({}),
         PrismaModule,
+        RedisModule,
         AuditModule,
+        TenancyModule,
         BillingModule,
       ],
       providers: [JwtStrategy],
@@ -144,6 +148,7 @@ describe('BillingModule webhook (e2e)', () => {
     it('renvoie 401 sans token', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/billing/subscribe')
+        .set('X-Organization-Id', orgId)
         .send({ planId, period: 'monthly' })
         .expect(401);
     });
@@ -152,6 +157,7 @@ describe('BillingModule webhook (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/billing/subscribe')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .send({ planId, period: 'monthly' })
         .expect(201);
 
@@ -170,6 +176,7 @@ describe('BillingModule webhook (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/billing/subscribe')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .send({ planId: 'not-a-uuid', period: 'weekly' })
         .expect(422);
     });
@@ -206,6 +213,7 @@ describe('BillingModule webhook (e2e)', () => {
       // En test, verifyWebhookSignature retourne toujours true — on teste le 401 via rawBody absent
       await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
+        .set('X-Organization-Id', orgId)
         // Pas de body → rawBody sera vide → 401
         .set('X-Aggregator-Signature', 'invalid')
         .expect(401);
@@ -222,6 +230,7 @@ describe('BillingModule webhook (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
         .set('Content-Type', 'application/json')
+        .set('X-Organization-Id', orgId)
         .set('X-Aggregator-Signature', 'test-mode-any-sig')
         .send(payload)
         .expect(200);
@@ -251,6 +260,7 @@ describe('BillingModule webhook (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
         .set('Content-Type', 'application/json')
+        .set('X-Organization-Id', orgId)
         .set('X-Aggregator-Signature', 'test-mode-any-sig')
         .send(payload)
         .expect(200);
@@ -262,6 +272,7 @@ describe('BillingModule webhook (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
         .set('Content-Type', 'application/json')
+        .set('X-Organization-Id', orgId)
         .set('X-Aggregator-Signature', 'test-mode-any-sig')
         .send(payload)
         .expect(200);

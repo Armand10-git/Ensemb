@@ -15,8 +15,8 @@ import request from 'supertest';
 import { PrismaModule } from '../src/common/prisma.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { OrganizationsModule } from '../src/modules/organizations/organizations.module';
-import { PublicOrganizationsController } from '../src/tenancy/public-organizations.controller';
-import { TenancyService } from '../src/tenancy/tenancy.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
+import { RedisModule } from '../src/common/redis.module';
 import { RedisService } from '../src/common/redis.service';
 import { RealtimeGateway } from '../src/modules/realtime/realtime.gateway';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
@@ -97,18 +97,17 @@ describe('OrganizationsController (e2e) — branding', () => {
         PassportModule,
         JwtModule.register({}),
         PrismaModule,
+        RedisModule,
         AuditModule,
+        TenancyModule,
         OrganizationsModule,
       ],
-      controllers: [PublicOrganizationsController],
-      providers: [
-        TenancyService,
-        JwtStrategy,
-        { provide: RedisService, useValue: mockRedis },
-      ],
+      providers: [JwtStrategy],
     })
       .overrideProvider(RealtimeGateway)
       .useValue(mockRealtimeGateway)
+      .overrideProvider(RedisService)
+      .useValue(mockRedis)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -151,6 +150,7 @@ describe('OrganizationsController (e2e) — branding', () => {
   it('PATCH sans token → 401', async () => {
     await request(app.getHttpServer())
       .patch('/api/v1/organizations/branding')
+      .set('X-Organization-Id', tenant1.orgId)
       .send({ primaryColor: '#3B82F6' })
       .expect(401);
   });
@@ -176,6 +176,7 @@ describe('OrganizationsController (e2e) — branding', () => {
     await request(app.getHttpServer())
       .patch('/api/v1/organizations/branding')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', orgNoPerm.id)
       .send({ primaryColor: '#3B82F6' })
       .expect(403);
   });
@@ -185,6 +186,7 @@ describe('OrganizationsController (e2e) — branding', () => {
     const res = await request(app.getHttpServer())
       .patch('/api/v1/organizations/branding')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', tenant1.orgId)
       .send({ logoUrl: 'https://cdn.example.com/logo.png', primaryColor: '#3B82F6' })
       .expect(200);
 
@@ -199,6 +201,7 @@ describe('OrganizationsController (e2e) — branding', () => {
     await request(app.getHttpServer())
       .patch('/api/v1/organizations/branding')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', tenant1.orgId)
       .send({})
       .expect(422);
   });
@@ -208,6 +211,7 @@ describe('OrganizationsController (e2e) — branding', () => {
     await request(app.getHttpServer())
       .patch('/api/v1/organizations/branding')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', tenant1.orgId)
       .send({ primaryColor: 'rouge' })
       .expect(422);
   });

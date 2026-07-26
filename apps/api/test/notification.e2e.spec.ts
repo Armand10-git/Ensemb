@@ -17,9 +17,9 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
@@ -29,6 +29,7 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { InventoryModule } from '../src/modules/inventory/inventory.module';
 import { NotificationModule } from '../src/modules/notifications/notification.module';
 import { RealtimeModule } from '../src/modules/realtime/realtime.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(40_000);
 
@@ -37,7 +38,7 @@ const ORG_A_SUBDOMAIN = `e2e-notif-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-notif-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -60,8 +61,6 @@ const PERMS = [
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({
     data: { name: 'E2E Notif Org A', subdomain: ORG_A_SUBDOMAIN },
   });
@@ -162,6 +161,7 @@ beforeAll(async () => {
       DocumentCounterModule,
       AuditModule,
       AuthModule,
+      TenancyModule,
       RealtimeModule,
       InventoryModule,
       NotificationModule,
@@ -207,7 +207,6 @@ afterAll(async () => {
     where: { organizationId: { in: [orgAId, orgBId] } },
   });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -217,6 +216,7 @@ async function createAndValidateSubtraction(qty: number): Promise<string> {
   const create = await supertest(app.getHttpServer())
     .post('/api/v1/inventory/adjustments')
     .set('Authorization', `Bearer ${tokenA}`)
+    .set('X-Organization-Id', orgAId)
     .send({
       warehouseId: warehouseAId,
       date: new Date().toISOString(),
@@ -234,7 +234,8 @@ async function createAndValidateSubtraction(qty: number): Promise<string> {
 
   const validate = await supertest(app.getHttpServer())
     .patch(`/api/v1/inventory/adjustments/${adjId}/validate`)
-    .set('Authorization', `Bearer ${tokenA}`);
+    .set('Authorization', `Bearer ${tokenA}`)
+    .set('X-Organization-Id', orgAId);
   expect(validate.status).toBe(200);
 
   // Petite pause pour laisser le createForOrg async se terminer
@@ -265,7 +266,8 @@ describe('Flow §18.10 — alerte stock bas → notification persistante', () =>
   it('GET /notifications → 200 avec la notification créée', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/notifications')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body.data).toBeInstanceOf(Array);
@@ -276,7 +278,8 @@ describe('Flow §18.10 — alerte stock bas → notification persistante', () =>
   it('GET /notifications/unread-count → { count: ≥1 } avant lecture', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/notifications/unread-count')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body.count).toBeGreaterThanOrEqual(1);
@@ -285,7 +288,8 @@ describe('Flow §18.10 — alerte stock bas → notification persistante', () =>
   it('PATCH /notifications/:id/read → readAt posé en base', async () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/notifications/${notifId}/read`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body.readAt).toBeTruthy();
@@ -297,7 +301,8 @@ describe('Flow §18.10 — alerte stock bas → notification persistante', () =>
   it('GET /notifications/unread-count → { count: 0 } après lecture', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/notifications/unread-count')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(0);
@@ -312,7 +317,8 @@ describe('Flow §18.10 — alerte stock bas → notification persistante', () =>
 
     const res = await supertest(app.getHttpServer())
       .patch('/api/v1/notifications/read-all')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body.updated).toBeGreaterThanOrEqual(1);
@@ -328,7 +334,8 @@ describe('Isolation tenant', () => {
   it('GET /notifications — user B ne voit pas les notifications de user A (org distincte)', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/notifications')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(200);
     const ids = (res.body.data as Array<{ id: string }>).map((n) => n.id);
@@ -338,7 +345,8 @@ describe('Isolation tenant', () => {
   it('PATCH /notifications/:id/read — user B ne peut pas marquer la notification de user A', async () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/notifications/${notifId}/read`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     // 404 (not found in org B) ou 403 — les deux sont acceptables
     expect([403, 404]).toContain(res.status);

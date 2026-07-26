@@ -103,7 +103,7 @@ export class PlatformAdminAuthService {
    * @param adminId - UUID du PlatformAdmin (extrait du tempToken step=totp-setup)
    */
   async setupTotp(adminId: string): Promise<SetupTotpResult> {
-    const secret = generateSecret({ crypto: CRYPTO_PLUGIN });
+    const secret = generateSecret({ crypto: CRYPTO_PLUGIN, base32: BASE32_PLUGIN });
     const admin = await this.prisma.platformAdmin.findUniqueOrThrow({
       where: { id: adminId },
       select: { email: true },

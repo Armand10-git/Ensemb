@@ -17,23 +17,32 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { CatalogModule } from '../src/modules/catalog/catalog.module';
+import { UploadsModule } from '../src/modules/uploads/uploads.module';
+import { StorageService } from '../src/modules/uploads/storage.service';
 
 jest.setTimeout(30_000);
+
+const mockStorage = {
+  upload: jest.fn().mockResolvedValue(undefined),
+  getSignedUrl: jest.fn().mockResolvedValue('https://mock.s3/signed'),
+  delete: jest.fn().mockResolvedValue(undefined),
+};
 
 const SUFFIX = Date.now();
 const ORG_A_SUBDOMAIN = `e2e-cat-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-cat-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -47,8 +56,6 @@ const CATALOG_PERMS = [
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({ data: { name: 'E2E Cat Org A', subdomain: ORG_A_SUBDOMAIN } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Cat Org B', subdomain: ORG_B_SUBDOMAIN } });
   orgAId = orgA.id;
@@ -96,9 +103,14 @@ beforeAll(async () => {
       RedisModule,
       AuditModule,
       AuthModule,
+      TenancyModule,
+      UploadsModule,
       CatalogModule,
     ],
-  }).compile();
+  })
+    .overrideProvider(StorageService)
+    .useValue(mockStorage)
+    .compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/v1');
@@ -127,7 +139,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Catégories ──────────────────────────────────────────────────────────────
@@ -137,6 +148,7 @@ describe('POST /api/v1/catalog/categories', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: `EL${SUFFIX % 100}`, name: `Électronique-${SUFFIX}` });
 
     expect(res.status).toBe(201);
@@ -149,11 +161,13 @@ describe('POST /api/v1/catalog/categories', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code, name: `Cat A - ${SUFFIX}` });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code, name: `Cat B - ${SUFFIX}` });
 
     expect(res.status).toBe(409);
@@ -164,11 +178,13 @@ describe('POST /api/v1/catalog/categories', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code, name: `SharedCatA-${SUFFIX}` });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ code, name: `SharedCatB-${SUFFIX}` });
 
     expect(res.status).toBe(201);
@@ -177,6 +193,7 @@ describe('POST /api/v1/catalog/categories', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
+      .set('X-Organization-Id', orgAId)
       .send({ code: 'TEST', name: 'Test' });
     expect(res.status).toBe(401);
   });
@@ -185,6 +202,7 @@ describe('POST /api/v1/catalog/categories', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: 'lower', name: 'Test' });
     expect(res.status).toBe(422);
   });
@@ -194,7 +212,8 @@ describe('GET /api/v1/catalog/categories', () => {
   it("200 — ne retourne que les catégories du tenant", async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/categories')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
@@ -209,6 +228,7 @@ describe('GET /api/v1/catalog/categories/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: `DT${SUFFIX % 100}`, name: `DetailCat-${SUFFIX}` });
     catId = (res.body as { id: string }).id;
   });
@@ -216,7 +236,8 @@ describe('GET /api/v1/catalog/categories/:id', () => {
   it("200 — retourne la catégorie du tenant", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/categories/${catId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(catId);
   });
@@ -224,7 +245,8 @@ describe('GET /api/v1/catalog/categories/:id', () => {
   it('403 ou 404 — un autre tenant ne peut pas voir cette catégorie', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/categories/${catId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
     expect([403, 404]).toContain(res.status);
   });
 });
@@ -236,6 +258,7 @@ describe('PATCH /api/v1/catalog/categories/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: `UP${SUFFIX % 100}`, name: `UpdateCat-${SUFFIX}` });
     catId = (res.body as { id: string }).id;
   });
@@ -244,6 +267,7 @@ describe('PATCH /api/v1/catalog/categories/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/categories/${catId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Updated-${SUFFIX}` });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe(`Updated-${SUFFIX}`);
@@ -253,6 +277,7 @@ describe('PATCH /api/v1/catalog/categories/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/categories/${catId}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name: 'Hack' });
     expect([403, 404]).toContain(res.status);
   });
@@ -263,17 +288,20 @@ describe('DELETE /api/v1/catalog/categories/:id', () => {
     const created = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: `DEL${SUFFIX % 10}`, name: `ToDelete-${SUFFIX}` });
     const catId = (created.body as { id: string }).id;
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/categories/${catId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/categories')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (list.body.data as { id: string }[]).map((c) => c.id);
     expect(ids).not.toContain(catId);
   });
@@ -282,6 +310,7 @@ describe('DELETE /api/v1/catalog/categories/:id', () => {
     const catRes = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/categories')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ code: `PR${SUFFIX % 10}`, name: `WithProduct-${SUFFIX}` });
     const catId = (catRes.body as { id: string }).id;
 
@@ -299,7 +328,8 @@ describe('DELETE /api/v1/catalog/categories/:id', () => {
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/categories/${catId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(400);
     expect(typeof res.body.message).toBe('string');
@@ -318,6 +348,7 @@ describe('POST /api/v1/catalog/brands', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Samsung-${SUFFIX}`, description: 'Marque tech' });
 
     expect(res.status).toBe(201);
@@ -330,11 +361,13 @@ describe('POST /api/v1/catalog/brands', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name });
 
     expect(res.status).toBe(409);
@@ -345,11 +378,13 @@ describe('POST /api/v1/catalog/brands', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name });
 
     expect(res.status).toBe(201);
@@ -359,6 +394,7 @@ describe('POST /api/v1/catalog/brands', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `BadURL-${SUFFIX}`, image: 'pas-une-url' });
     expect(res.status).toBe(422);
   });
@@ -368,7 +404,8 @@ describe('GET /api/v1/catalog/brands', () => {
   it("200 — ne retourne que les marques du tenant", async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/brands')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
@@ -383,6 +420,7 @@ describe('PATCH /api/v1/catalog/brands/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `UpdateBrand-${SUFFIX}` });
     brandId = (res.body as { id: string }).id;
   });
@@ -391,6 +429,7 @@ describe('PATCH /api/v1/catalog/brands/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/brands/${brandId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `UpdatedBrand-${SUFFIX}` });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe(`UpdatedBrand-${SUFFIX}`);
@@ -400,6 +439,7 @@ describe('PATCH /api/v1/catalog/brands/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/brands/${brandId}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name: 'Hack' });
     expect([403, 404]).toContain(res.status);
   });
@@ -410,17 +450,20 @@ describe('DELETE /api/v1/catalog/brands/:id', () => {
     const created = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/brands')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `DeleteBrand-${SUFFIX}` });
     const brandId = (created.body as { id: string }).id;
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/brands/${brandId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/brands')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (list.body.data as { id: string }[]).map((b) => b.id);
     expect(ids).not.toContain(brandId);
   });

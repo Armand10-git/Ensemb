@@ -17,8 +17,8 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { getTestPrisma } from './helpers/prisma';
 import bcrypt from 'bcryptjs';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
@@ -28,6 +28,7 @@ import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
 import { InventoryModule } from '../src/modules/inventory/inventory.module';
 import { RealtimeModule } from '../src/modules/realtime/realtime.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(40_000);
 
@@ -36,7 +37,7 @@ const ORG_A_SUBDOMAIN = `e2e-adj-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-adj-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -50,8 +51,6 @@ const PERMS = ['adjustments.view', 'adjustments.create', 'adjustments.validate',
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({ data: { name: 'E2E Adj Org A', subdomain: ORG_A_SUBDOMAIN } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Adj Org B', subdomain: ORG_B_SUBDOMAIN } });
   orgAId = orgA.id;
@@ -131,6 +130,7 @@ beforeAll(async () => {
       AuditModule,
       AuthModule,
       RealtimeModule,
+      TenancyModule,
       InventoryModule,
     ],
   }).compile();
@@ -167,7 +167,6 @@ afterAll(async () => {
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.documentCounter.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── POST /inventory/adjustments ─────────────────────────────────────────────
@@ -177,6 +176,7 @@ describe('POST /api/v1/inventory/adjustments', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -193,6 +193,7 @@ describe('POST /api/v1/inventory/adjustments', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
+      .set('X-Organization-Id', orgAId)
       .send({ warehouseId: warehouseAId, date: '2026-07-21T00:00:00.000Z', details: [] });
 
     expect(res.status).toBe(401);
@@ -202,6 +203,7 @@ describe('POST /api/v1/inventory/adjustments', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ warehouseId: warehouseAId, date: '2026-07-21T00:00:00.000Z', details: [] });
 
     expect(res.status).toBe(422);
@@ -211,6 +213,7 @@ describe('POST /api/v1/inventory/adjustments', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -231,6 +234,7 @@ describe('PATCH /api/v1/inventory/adjustments/:id/validate', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -245,6 +249,7 @@ describe('PATCH /api/v1/inventory/adjustments/:id/validate', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/inventory/adjustments/${draftId}/validate`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send();
 
     expect(res.status).toBe(200);
@@ -260,12 +265,14 @@ describe('PATCH /api/v1/inventory/adjustments/:id/validate', () => {
     await supertest(app.getHttpServer())
       .patch(`/api/v1/inventory/adjustments/${draftId}/validate`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send();
 
     // Re-valider → 400
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/inventory/adjustments/${draftId}/validate`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send();
 
     expect(res.status).toBe(400);
@@ -279,6 +286,7 @@ describe('ADDITION + SOUSTRACTION combinées — net +2', () => {
     const createRes = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -293,6 +301,7 @@ describe('ADDITION + SOUSTRACTION combinées — net +2', () => {
     const valRes = await supertest(app.getHttpServer())
       .patch(`/api/v1/inventory/adjustments/${createRes.body.id as string}/validate`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send();
 
     expect(valRes.status).toBe(200);
@@ -310,6 +319,7 @@ describe('DELETE /api/v1/inventory/adjustments/:id', () => {
     const createRes = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -319,7 +329,8 @@ describe('DELETE /api/v1/inventory/adjustments/:id', () => {
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/inventory/adjustments/${adjId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(204);
   });
@@ -328,6 +339,7 @@ describe('DELETE /api/v1/inventory/adjustments/:id', () => {
     const createRes = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -338,11 +350,13 @@ describe('DELETE /api/v1/inventory/adjustments/:id', () => {
     await supertest(app.getHttpServer())
       .patch(`/api/v1/inventory/adjustments/${adjId}/validate`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send();
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/inventory/adjustments/${adjId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(400);
   });
@@ -356,6 +370,7 @@ describe('GET /api/v1/inventory/adjustments — isolation', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/inventory/adjustments')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         warehouseId: warehouseAId,
         date: '2026-07-21T00:00:00.000Z',
@@ -365,7 +380,8 @@ describe('GET /api/v1/inventory/adjustments — isolation', () => {
     // Org B ne doit pas en voir
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/inventory/adjustments')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(200);
     const data = res.body.data as { organizationId: string }[];

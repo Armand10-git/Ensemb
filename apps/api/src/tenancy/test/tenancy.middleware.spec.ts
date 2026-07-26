@@ -17,7 +17,7 @@ describe('TenancyMiddleware', () => {
   });
 
   function makeReq(hostname: string) {
-    return { hostname } as never;
+    return { hostname, headers: {} } as never;
   }
 
   function makeRes() {

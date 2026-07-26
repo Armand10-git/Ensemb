@@ -14,8 +14,8 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import {
   S3Client,
   CreateBucketCommand,
@@ -29,6 +29,7 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { RolesModule } from '../src/modules/roles/roles.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { UploadsModule } from '../src/modules/uploads/uploads.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(60_000);
 
@@ -40,7 +41,7 @@ let orgAId: string;
 let orgBId: string;
 let tokenA: string;
 let tokenB: string;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let s3: S3Client;
 let app: INestApplication;
 const createdKeys: string[] = []; // nettoyage afterAll
@@ -60,8 +61,6 @@ function makePdfBuffer(): Buffer {
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   // ── S3 client MinIO (crée le bucket si absent) ────────────────────────────
   s3 = new S3Client({
     endpoint:        process.env['S3_ENDPOINT']           ?? 'http://localhost:9000',
@@ -130,6 +129,7 @@ beforeAll(async () => {
       AuthModule,
       RolesModule,
       AuditModule,
+      TenancyModule,
       UploadsModule,
     ],
   }).compile();
@@ -144,11 +144,13 @@ beforeAll(async () => {
 
   const resA = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgAId)
     .send({ email: email_a, password: 'Pass@1234!' });
   tokenA = (resA.body as { accessToken: string }).accessToken;
 
   const resB = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgBId)
     .send({ email: email_b, password: 'Pass@1234!' });
   tokenB = (resB.body as { accessToken: string }).accessToken;
 });
@@ -166,7 +168,6 @@ afterAll(async () => {
     data: { deletedAt: new Date() },
   });
 
-  await prisma.$disconnect();
   await app.close();
 });
 
@@ -176,6 +177,7 @@ describe('POST /api/v1/uploads/images', () => {
   it('sans token → 401', async () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
+      .set('X-Organization-Id', orgAId)
       .attach('file', Buffer.from([0xff, 0xd8, 0xff]), 'photo.jpg')
       .expect(401);
   });
@@ -186,6 +188,7 @@ describe('POST /api/v1/uploads/images', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpeg, { filename: 'photo.jpg', contentType: 'image/jpeg' })
       .expect(201);
 
@@ -198,6 +201,7 @@ describe('POST /api/v1/uploads/images', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', makePdfBuffer(), { filename: 'doc.pdf', contentType: 'application/pdf' })
       .expect(415);
   });
@@ -208,6 +212,7 @@ describe('POST /api/v1/uploads/images', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', big, { filename: 'huge.jpg', contentType: 'image/jpeg' });
 
     expect([400, 413]).toContain(res.status);
@@ -223,6 +228,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=logos')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpeg, { filename: 'logo.jpg', contentType: 'image/jpeg' });
 
     uploadedKey = (res.body as { s3Key: string }).s3Key;
@@ -233,6 +239,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/uploads/images/signed-url?key=${encodeURIComponent(uploadedKey)}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .expect(200);
 
     const body = res.body as { url: string; expiresIn: number };
@@ -246,6 +253,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     await supertest(app.getHttpServer())
       .get(`/api/v1/uploads/images/signed-url?key=${encodeURIComponent(uploadedKey)}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .expect(403);
   });
 });

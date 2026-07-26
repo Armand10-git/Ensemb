@@ -15,14 +15,18 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
+import { DocumentCounterModule } from '../src/common/document-counter.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { RealtimeModule } from '../src/modules/realtime/realtime.module';
 import { InventoryModule } from '../src/modules/inventory/inventory.module';
+import { NotificationModule } from '../src/modules/notifications/notification.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(30_000);
 
@@ -31,7 +35,7 @@ const ORG_A_SUBDOMAIN = `e2e-inv-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-inv-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -44,8 +48,6 @@ const INVENTORY_PERMS = ['adjustments.view', 'adjustments.create'];
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({ data: { name: 'E2E Inv Org A', subdomain: ORG_A_SUBDOMAIN } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Inv Org B', subdomain: ORG_B_SUBDOMAIN } });
   orgAId = orgA.id;
@@ -115,9 +117,13 @@ beforeAll(async () => {
       PrismaModule,
       EncryptionModule,
       RedisModule,
+      DocumentCounterModule,
       AuditModule,
       AuthModule,
+      RealtimeModule,
       InventoryModule,
+      NotificationModule,
+      TenancyModule,
     ],
   }).compile();
 
@@ -149,7 +155,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── POST /inventory/stock/init ──────────────────────────────────────────────
@@ -159,6 +164,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res.status).toBe(200);
@@ -174,11 +180,13 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res1 = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     const res2 = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res1.status).toBe(200);
@@ -189,6 +197,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res.status).toBe(401);
@@ -198,6 +207,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: 'pas-un-uuid' });
 
     expect(res.status).toBe(400);
@@ -210,7 +220,8 @@ describe('GET /api/v1/inventory/stock/product/:productId', () => {
   it('200 — retourne les stocks du produit par entrepôt', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/product/${productAId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -221,7 +232,8 @@ describe('GET /api/v1/inventory/stock/product/:productId', () => {
   it('isolation — tenant B ne peut pas voir le stock du produit de tenant A', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/product/${productAId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     // ForbiddenException (403) car produit n'appartient pas à org B
     expect(res.status).toBe(403);
@@ -234,7 +246,8 @@ describe('GET /api/v1/inventory/stock/warehouse/:warehouseId', () => {
   it("200 — retourne le stock paginé de l'entrepôt", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/warehouse/${warehouseAId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ data: expect.any(Array), total: expect.any(Number) });
@@ -243,7 +256,8 @@ describe('GET /api/v1/inventory/stock/warehouse/:warehouseId', () => {
   it("isolation — tenant B ne peut pas voir le stock de l'entrepôt de tenant A", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/warehouse/${warehouseAId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(403);
   });

@@ -31,4 +31,13 @@ export class TenantContextService {
     }
     return store.organizationId;
   }
+
+  /**
+   * Retourne l'organizationId courant, ou null si aucun contexte tenant n'est actif.
+   * À utiliser uniquement dans les gardes qui s'appliquent aussi sur les routes exemptées
+   * du middleware (auth/public/platform-admin) où aucun contexte n'est posé.
+   */
+  tryGetOrganizationId(): string | null {
+    return this.storage.getStore()?.organizationId ?? null;
+  }
 }

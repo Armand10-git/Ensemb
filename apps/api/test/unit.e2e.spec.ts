@@ -17,23 +17,32 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
+import { UploadsModule } from '../src/modules/uploads/uploads.module';
+import { StorageService } from '../src/modules/uploads/storage.service';
 import { CatalogModule } from '../src/modules/catalog/catalog.module';
 
 jest.setTimeout(30_000);
+
+const mockStorage = {
+  upload: jest.fn().mockResolvedValue(undefined),
+  getSignedUrl: jest.fn().mockResolvedValue('https://mock.s3/signed'),
+  delete: jest.fn().mockResolvedValue(undefined),
+};
 
 const SUFFIX = Date.now();
 const ORG_A_SUBDOMAIN = `e2e-unit-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-unit-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -44,8 +53,6 @@ const UNIT_PERMS = ['units.view', 'units.create', 'units.edit', 'units.delete'];
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({
     data: { name: 'E2E Unit Org A', subdomain: ORG_A_SUBDOMAIN },
   });
@@ -101,9 +108,14 @@ beforeAll(async () => {
       RedisModule,
       AuditModule,
       AuthModule,
+      TenancyModule,
+      UploadsModule,
       CatalogModule,
     ],
-  }).compile();
+  })
+    .overrideProvider(StorageService)
+    .useValue(mockStorage)
+    .compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/v1');
@@ -138,7 +150,6 @@ afterAll(async () => {
   });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Création ────────────────────────────────────────────────────────────────
@@ -148,6 +159,7 @@ describe('POST /api/v1/catalog/units', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Kg-${SUFFIX}`, shortName: `kg${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     expect(res.status).toBe(201);
@@ -159,11 +171,13 @@ describe('POST /api/v1/catalog/units', () => {
     const base = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Base-${SUFFIX}`, shortName: `b${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     const derived = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         name: `Deriv-${SUFFIX}`,
         shortName: `d${SUFFIX % 1000}`,
@@ -181,11 +195,13 @@ describe('POST /api/v1/catalog/units', () => {
     const base = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Root-${SUFFIX}`, shortName: `r${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     const lvl1 = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         name: `Lvl1-${SUFFIX}`,
         shortName: `l1${SUFFIX % 1000}`,
@@ -197,6 +213,7 @@ describe('POST /api/v1/catalog/units', () => {
     const lvl2 = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         name: `Lvl2-${SUFFIX}`,
         shortName: `l2${SUFFIX % 1000}`,
@@ -215,11 +232,13 @@ describe('POST /api/v1/catalog/units', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, shortName: `du1${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, shortName: `du2${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     expect(res.status).toBe(409);
@@ -230,11 +249,13 @@ describe('POST /api/v1/catalog/units', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name, shortName: `su1${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name, shortName: `su2${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
 
     expect(res.status).toBe(201);
@@ -243,6 +264,7 @@ describe('POST /api/v1/catalog/units', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Test', shortName: 't', operator: '*', operatorValue: '1' });
     expect(res.status).toBe(401);
   });
@@ -254,7 +276,8 @@ describe('GET /api/v1/catalog/units', () => {
   it('200 — ne retourne que les unités du tenant', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/units')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
@@ -271,6 +294,7 @@ describe('GET /api/v1/catalog/units/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Detail-${SUFFIX}`, shortName: `dt${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
     unitId = (res.body as { id: string }).id;
   });
@@ -278,7 +302,8 @@ describe('GET /api/v1/catalog/units/:id', () => {
   it('200 — retourne l\'unité du tenant', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/units/${unitId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(unitId);
   });
@@ -286,7 +311,8 @@ describe('GET /api/v1/catalog/units/:id', () => {
   it('403 ou 404 — autre tenant ne peut pas voir cette unité', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/units/${unitId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
     expect([403, 404]).toContain(res.status);
   });
 });
@@ -300,6 +326,7 @@ describe('PATCH /api/v1/catalog/units/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Update-${SUFFIX}`, shortName: `up${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
     unitId = (res.body as { id: string }).id;
   });
@@ -308,6 +335,7 @@ describe('PATCH /api/v1/catalog/units/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/units/${unitId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Updated-${SUFFIX}` });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe(`Updated-${SUFFIX}`);
@@ -317,6 +345,7 @@ describe('PATCH /api/v1/catalog/units/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/units/${unitId}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name: 'Hack' });
     expect([403, 404]).toContain(res.status);
   });
@@ -329,17 +358,20 @@ describe('DELETE /api/v1/catalog/units/:id', () => {
     const created = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Del-${SUFFIX}`, shortName: `del${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
     const unitId = (created.body as { id: string }).id;
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/units/${unitId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/units')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (list.body.data as { id: string }[]).map((u) => u.id);
     expect(ids).not.toContain(unitId);
   });
@@ -348,12 +380,14 @@ describe('DELETE /api/v1/catalog/units/:id', () => {
     const base = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Parent-${SUFFIX}`, shortName: `par${SUFFIX % 1000}`, operator: '*', operatorValue: '1' });
     const baseId = (base.body as { id: string }).id;
 
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/units')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         name: `Child-${SUFFIX}`,
         shortName: `ch${SUFFIX % 1000}`,
@@ -364,7 +398,8 @@ describe('DELETE /api/v1/catalog/units/:id', () => {
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/units/${baseId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(400);
     expect(typeof res.body.message).toBe('string');

@@ -19,11 +19,13 @@ import { JwtModule, JwtService } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
 import { PrismaModule } from '../src/common/prisma.module';
+import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { BackupModule } from '../src/modules/backup/backup.module';
 import { BackupService } from '../src/modules/backup/backup.service';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { PrismaService } from '../src/common/prisma.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 const PREFIX = `t09-test-${Date.now()}`;
 const TEST_JWT_SECRET = 'test-jwt-secret-t09-backup';
@@ -58,7 +60,9 @@ describe('BackupModule (e2e)', () => {
         PassportModule,
         JwtModule.register({}),
         PrismaModule,
+        RedisModule,
         AuditModule,
+        TenancyModule,
         BackupModule,
       ],
       providers: [JwtStrategy],
@@ -161,6 +165,7 @@ describe('BackupModule (e2e)', () => {
   it('POST /api/v1/backup/exports sans token → 401', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/backup/exports')
+      .set('X-Organization-Id', orgAId)
       .expect(401);
   });
 
@@ -170,6 +175,7 @@ describe('BackupModule (e2e)', () => {
     await request(app.getHttpServer())
       .post('/api/v1/backup/exports')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .expect(403);
   });
 
@@ -182,6 +188,7 @@ describe('BackupModule (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/backup/exports')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', orgAId)
       .send({ format: 'CSV' })
       .expect(201);
 
@@ -195,6 +202,7 @@ describe('BackupModule (e2e)', () => {
     const res = await request(app.getHttpServer())
       .get('/api/v1/backup/exports')
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', orgAId)
       .expect(200);
 
     const body = res.body as { data: Array<{ id: string }>; total: number };
@@ -231,6 +239,7 @@ describe('BackupModule (e2e)', () => {
     const res = await request(app.getHttpServer())
       .get(`/api/v1/backup/exports/${exportId}/download`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', orgAId)
       .expect(200);
 
     expect(res.headers['content-type']).toMatch(/text\/csv/);
@@ -242,6 +251,7 @@ describe('BackupModule (e2e)', () => {
     await request(app.getHttpServer())
       .get(`/api/v1/backup/exports/${exportId}/download`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .expect(403);
   });
 
@@ -254,6 +264,7 @@ describe('BackupModule (e2e)', () => {
     await request(app.getHttpServer())
       .delete(`/api/v1/backup/exports/${exportId}`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Organization-Id', orgAId)
       .expect(204);
 
     // Fichier physique supprimé
