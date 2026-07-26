@@ -10,7 +10,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
+    // En tests Jest (forceExit:true), le processus se termine par RST — pas de TIME_WAIT.
+    // L'appel explicite $disconnect() génère un FIN gracieux → TIME_WAIT Windows, qui
+    // épuise la plage des ports éphémères lors des runs séquentiels (S19 test infra).
+    if (!process.env['JEST_WORKER_ID']) {
+      await this.$disconnect();
+    }
   }
 
   /**

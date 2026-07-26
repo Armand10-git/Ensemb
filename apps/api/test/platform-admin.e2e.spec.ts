@@ -109,7 +109,7 @@ describe('PlatformAdminModule (e2e)', () => {
       },
     });
     if (withTotp) {
-      const secret = generateSecret({ crypto: CRYPTO_PLUGIN });
+      const secret = generateSecret({ crypto: CRYPTO_PLUGIN, base32: BASE32_PLUGIN });
       const encryptedSecret = encryption.encrypt(secret);
       await prisma.platformAdmin.update({
         where: { id: admin.id },

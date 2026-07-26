@@ -14,8 +14,8 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import {
   S3Client,
   CreateBucketCommand,
@@ -40,7 +40,7 @@ let orgAId: string;
 let orgBId: string;
 let tokenA: string;
 let tokenB: string;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let s3: S3Client;
 let app: INestApplication;
 const createdKeys: string[] = []; // nettoyage afterAll
@@ -60,8 +60,6 @@ function makePdfBuffer(): Buffer {
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   // ── S3 client MinIO (crée le bucket si absent) ────────────────────────────
   s3 = new S3Client({
     endpoint:        process.env['S3_ENDPOINT']           ?? 'http://localhost:9000',
@@ -144,11 +142,13 @@ beforeAll(async () => {
 
   const resA = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgAId)
     .send({ email: email_a, password: 'Pass@1234!' });
   tokenA = (resA.body as { accessToken: string }).accessToken;
 
   const resB = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgBId)
     .send({ email: email_b, password: 'Pass@1234!' });
   tokenB = (resB.body as { accessToken: string }).accessToken;
 });
@@ -166,7 +166,6 @@ afterAll(async () => {
     data: { deletedAt: new Date() },
   });
 
-  await prisma.$disconnect();
   await app.close();
 });
 

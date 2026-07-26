@@ -5,8 +5,8 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from '../../../../test/helpers/prisma';
 import { PrismaModule } from '../../../common/prisma.module';
 import { RedisModule } from '../../../common/redis.module';
 import { AuthController } from '../auth.controller';
@@ -23,12 +23,10 @@ jest.setTimeout(30_000);
 
 const TEST_ORG_SUBDOMAIN = `test-auth-e2e-${Date.now()}`;
 let orgId: string;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let app: INestApplication;
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const org = await prisma.organization.create({
     data: { name: 'Auth E2E Org', subdomain: TEST_ORG_SUBDOMAIN },
   });
@@ -80,7 +78,6 @@ afterAll(async () => {
   await app.close();
   await prisma.user.deleteMany({ where: { organizationId: orgId } });
   await prisma.organization.delete({ where: { id: orgId } });
-  await prisma.$disconnect();
 });
 
 describe('POST /api/v1/auth/login', () => {

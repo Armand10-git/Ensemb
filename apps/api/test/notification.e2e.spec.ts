@@ -17,9 +17,9 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
@@ -37,7 +37,7 @@ const ORG_A_SUBDOMAIN = `e2e-notif-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-notif-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -60,8 +60,6 @@ const PERMS = [
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({
     data: { name: 'E2E Notif Org A', subdomain: ORG_A_SUBDOMAIN },
   });
@@ -207,7 +205,6 @@ afterAll(async () => {
     where: { organizationId: { in: [orgAId, orgBId] } },
   });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -15,14 +15,17 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
+import { DocumentCounterModule } from '../src/common/document-counter.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { RealtimeModule } from '../src/modules/realtime/realtime.module';
 import { InventoryModule } from '../src/modules/inventory/inventory.module';
+import { NotificationModule } from '../src/modules/notifications/notification.module';
 
 jest.setTimeout(30_000);
 
@@ -31,7 +34,7 @@ const ORG_A_SUBDOMAIN = `e2e-inv-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-inv-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -44,8 +47,6 @@ const INVENTORY_PERMS = ['adjustments.view', 'adjustments.create'];
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({ data: { name: 'E2E Inv Org A', subdomain: ORG_A_SUBDOMAIN } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Inv Org B', subdomain: ORG_B_SUBDOMAIN } });
   orgAId = orgA.id;
@@ -115,9 +116,12 @@ beforeAll(async () => {
       PrismaModule,
       EncryptionModule,
       RedisModule,
+      DocumentCounterModule,
       AuditModule,
       AuthModule,
+      RealtimeModule,
       InventoryModule,
+      NotificationModule,
     ],
   }).compile();
 
@@ -149,7 +153,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── POST /inventory/stock/init ──────────────────────────────────────────────

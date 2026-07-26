@@ -1,4 +1,4 @@
-import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
+import { Global, MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { PrismaService } from '../common/prisma.service';
 import { TenantContextService } from './tenant-context.service';
 import { TenancyMiddleware } from './tenancy.middleware';
@@ -24,13 +24,14 @@ export const PRISMA_TENANT_CLIENT = 'PRISMA_TENANT_CLIENT';
  * /api/v1/platform-admin/* est la console plateforme — auth séparée, jamais via un tenant.
  */
 const EXEMPT_ROUTES = [
-  { path: 'health', method: RequestMethod.GET },
-  { path: 'ready', method: RequestMethod.GET },
-  { path: 'api/v1/auth/(.*)', method: RequestMethod.ALL },
-  { path: 'api/v1/public/(.*)', method: RequestMethod.ALL },
-  { path: 'api/v1/platform-admin/(.*)', method: RequestMethod.ALL },
+  { path: '/health', method: RequestMethod.GET },
+  { path: '/ready', method: RequestMethod.GET },
+  { path: '/api/v1/auth/(.*)', method: RequestMethod.ALL },
+  { path: '/api/v1/public/(.*)', method: RequestMethod.ALL },
+  { path: '/api/v1/platform-admin/(.*)', method: RequestMethod.ALL },
 ];
 
+@Global()
 @Module({
   controllers: [PublicOrganizationsController],
   providers: [

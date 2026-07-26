@@ -19,8 +19,8 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import sharp from 'sharp';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
@@ -49,7 +49,7 @@ const ORG_A_SUB = `e2e-prod-a-${SUFFIX}`;
 const ORG_B_SUB = `e2e-prod-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string, orgBId: string;
 let tokenA: string, tokenB: string;
 let catAId: string, catBId: string;
@@ -64,8 +64,6 @@ const PRODUCT_PERMS = [
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({ data: { name: 'E2E Prod A', subdomain: ORG_A_SUB } });
   const orgB = await prisma.organization.create({ data: { name: 'E2E Prod B', subdomain: ORG_B_SUB } });
   orgAId = orgA.id;
@@ -151,8 +149,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-
-  await prisma.$disconnect();
 });
 
 // ─── Helpers produit ──────────────────────────────────────────────────────────

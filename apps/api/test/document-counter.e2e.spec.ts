@@ -7,8 +7,8 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
-import { PrismaClient } from '@prisma/client';
 import { PrismaModule } from '../src/common/prisma.module';
+import { getTestPrisma } from './helpers/prisma';
 import { DocumentCounterModule } from '../src/common/document-counter.module';
 import { DocumentCounterService } from '../src/common/document-counter.service';
 import { PrismaService } from '../src/common/prisma.service';
@@ -18,7 +18,7 @@ jest.setTimeout(30_000);
 const SUFFIX = Date.now();
 const ORG_SUBDOMAIN = `e2e-counter-${SUFFIX}`;
 
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let prismaService: PrismaService;
 let documentCounterService: DocumentCounterService;
 let orgId: string;
@@ -26,8 +26,6 @@ let orgId: string;
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const org = await prisma.organization.create({
     data: { name: 'E2E Counter Org', subdomain: ORG_SUBDOMAIN },
   });
@@ -48,7 +46,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await prisma.documentCounter.deleteMany({ where: { organizationId: orgId } });
   await prisma.organization.delete({ where: { id: orgId } });
-  await prisma.$disconnect();
 });
 
 // ─── Test de concurrence (critère principal S15b) ────────────────────────────

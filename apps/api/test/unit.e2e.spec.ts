@@ -17,23 +17,31 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
+import { UploadsModule } from '../src/modules/uploads/uploads.module';
+import { StorageService } from '../src/modules/uploads/storage.service';
 import { CatalogModule } from '../src/modules/catalog/catalog.module';
 
 jest.setTimeout(30_000);
+
+const mockStorage = {
+  upload: jest.fn().mockResolvedValue(undefined),
+  getSignedUrl: jest.fn().mockResolvedValue('https://mock.s3/signed'),
+  delete: jest.fn().mockResolvedValue(undefined),
+};
 
 const SUFFIX = Date.now();
 const ORG_A_SUBDOMAIN = `e2e-unit-a-${SUFFIX}`;
 const ORG_B_SUBDOMAIN = `e2e-unit-b-${SUFFIX}`;
 
 let app: INestApplication;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let orgAId: string;
 let orgBId: string;
 let tokenA: string;
@@ -44,8 +52,6 @@ const UNIT_PERMS = ['units.view', 'units.create', 'units.edit', 'units.delete'];
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   const orgA = await prisma.organization.create({
     data: { name: 'E2E Unit Org A', subdomain: ORG_A_SUBDOMAIN },
   });
@@ -101,9 +107,13 @@ beforeAll(async () => {
       RedisModule,
       AuditModule,
       AuthModule,
+      UploadsModule,
       CatalogModule,
     ],
-  }).compile();
+  })
+    .overrideProvider(StorageService)
+    .useValue(mockStorage)
+    .compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/v1');
@@ -138,7 +148,6 @@ afterAll(async () => {
   });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Création ────────────────────────────────────────────────────────────────

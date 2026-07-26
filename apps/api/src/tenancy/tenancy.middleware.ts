@@ -19,14 +19,36 @@ export class TenancyMiddleware implements NestMiddleware {
   ) {}
 
   async use(req: Request, res: Response, next: NextFunction): Promise<void> {
-    const subdomain = this.extractSubdomain(req.hostname ?? '');
-
-    if (!subdomain) {
-      res.status(404).json({ message: 'Organisation introuvable' });
-      return;
+    // Routes exemptées de la résolution tenant (NestJS exclude() est peu fiable en v10
+    // avec les patterns path-to-regexp — on gère ici en défense secondaire)
+    // NestJS manipule req.path lors du dispatch de middleware — il faut req.originalUrl
+    // pour obtenir le chemin complet original de la requête.
+    const p = (req.originalUrl ?? req.url ?? '').split('?')[0] ?? '/';
+    if (
+      p === '/health' ||
+      p === '/ready' ||
+      p.startsWith('/api/v1/auth/') ||
+      p.startsWith('/api/v1/public/') ||
+      p.startsWith('/api/v1/platform-admin/')
+    ) {
+      return next();
     }
 
-    const organizationId = await this.tenancyService.resolveOrganizationId(subdomain);
+    // Priorité 1 : sous-domaine extrait du header Host (prod + staging)
+    // Priorité 2 : header X-Organization-Id (dev localhost, mobile, outils CLI)
+    const subdomain = this.extractSubdomain(req.hostname ?? '');
+    let organizationId: string | null = null;
+
+    if (subdomain) {
+      organizationId = await this.tenancyService.resolveOrganizationId(subdomain);
+    } else {
+      // En dev (localhost / IP sans sous-domaine), on accepte l'ID direct.
+      // En prod, ce chemin est inaccessible car le Host contient toujours le sous-domaine.
+      const headerOrgId = req.headers['x-organization-id'];
+      if (typeof headerOrgId === 'string' && headerOrgId.length > 0) {
+        organizationId = headerOrgId;
+      }
+    }
 
     if (!organizationId) {
       res.status(404).json({ message: 'Organisation introuvable' });

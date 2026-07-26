@@ -12,8 +12,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { getTestPrisma } from './helpers/prisma';
 import { PrismaModule } from '../src/common/prisma.module';
 import { RedisModule } from '../src/common/redis.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
@@ -32,14 +32,12 @@ let orgAId: string;
 let orgBId: string;
 let tokenA: string;
 let tokenB: string;
-let prisma: PrismaClient;
+const prisma = getTestPrisma();
 let app: INestApplication;
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 beforeAll(async () => {
-  prisma = new PrismaClient();
-
   // Organisation A
   const orgA = await prisma.organization.create({
     data: { name: 'Partners E2E Org A', subdomain: SUBDOMAIN_A },
@@ -132,12 +130,14 @@ beforeAll(async () => {
   // Login org A
   const resA = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgAId)
     .send({ email: `userA-${SUFFIX}@e2e.cm`, password: 'Pass@1234!' });
   tokenA = (resA.body as { accessToken: string }).accessToken;
 
   // Login org B
   const resB = await supertest(app.getHttpServer())
     .post('/api/v1/auth/login')
+    .set('X-Organization-Id', orgBId)
     .send({ email: `userB-${SUFFIX}@e2e.cm`, password: 'Pass@1234!' });
   tokenB = (resB.body as { accessToken: string }).accessToken;
 });
@@ -152,7 +152,6 @@ afterAll(async () => {
   await prisma.permissionOnRole.deleteMany({ where: { role: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.role.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.organization.deleteMany({ where: { id: { in: [orgAId, orgBId] } } });
-  await prisma.$disconnect();
 });
 
 // ─── Tests CRUD Clients ───────────────────────────────────────────────────────
@@ -255,7 +254,7 @@ describe('CRUD Providers', () => {
 
 describe('Import CSV Clients', () => {
   it('import CSV valide → 200, données persistées', async () => {
-    const csv = 'name,email,phone,country,city,address\nAlpha,alpha@test.cm,+237100,,Douala,\nBeta,beta@test.cm,,,\n';
+    const csv = 'name,email,phone,country,city,address\nAlpha,alpha@test.cm,+237100,,Douala,\nBeta,beta@test.cm,,,,\n';
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients/import')
@@ -268,7 +267,7 @@ describe('Import CSV Clients', () => {
   });
 
   it('import CSV avec lignes invalides → 200, valides importées, invalides ignorées', async () => {
-    const csv = 'name,email,phone,country,city,address\nGamma,gamma@test.cm,,,\nDelta,not-an-email,,,\n';
+    const csv = 'name,email,phone,country,city,address\nGamma,gamma@test.cm,,,,\nDelta,not-an-email,,,,\n';
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients/import')
