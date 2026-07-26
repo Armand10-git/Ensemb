@@ -4,11 +4,23 @@ function getToken(): string | null {
   return localStorage.getItem('access_token');
 }
 
+/**
+ * En dev/CLI (Host sans sous-domaine, ex. localhost), TenancyMiddleware résout le tenant
+ * via ce header plutôt que via le sous-domaine — cf. tenancy.middleware.ts. Posé en
+ * localStorage à la connexion (routes/login.tsx). Sans lui, toute route protégée renvoie
+ * 404 "Organisation introuvable" avant même d'atteindre le contrôleur.
+ */
+function getOrganizationId(): string | null {
+  return localStorage.getItem('organization_id');
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
+  const organizationId = getOrganizationId();
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(organizationId ? { 'X-Organization-Id': organizationId } : {}),
     ...(options?.headers ?? {}),
   };
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
@@ -22,7 +34,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 async function upload<T>(path: string, formData: FormData): Promise<T> {
   const token = getToken();
-  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+  const organizationId = getOrganizationId();
+  const headers: HeadersInit = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(organizationId ? { 'X-Organization-Id': organizationId } : {}),
+  };
   const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: formData });
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { message?: string };
