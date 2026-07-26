@@ -1,6 +1,30 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Pencil, Trash2, Warehouse as WarehouseIcon } from 'lucide-react';
 import { api } from '../../lib/api';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Badge } from '../../components/ui/badge';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '../../components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui/alert-dialog';
+import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,63 +85,14 @@ function useDeleteWarehouse() {
   });
 }
 
-// ─── Composants ──────────────────────────────────────────────────────────────
+// ─── Formulaire création / édition ────────────────────────────────────────────
 
-function SkeletonRow() {
-  return (
-    <tr className="animate-pulse" aria-busy="true">
-      {[1, 2, 3, 4].map((i) => (
-        <td key={i} className="px-4 py-3">
-          <div className="h-4 bg-gray-200 rounded w-full" />
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div
-      role="alert"
-      className="flex items-center justify-between rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800"
-    >
-      <span>{message}</span>
-      <button
-        onClick={onRetry}
-        className="ml-4 rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700"
-      >
-        Réessayer
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-      <p className="text-lg font-medium">Aucun entrepôt</p>
-      <p className="mt-1 text-sm">Créez votre premier entrepôt pour commencer à gérer votre stock.</p>
-      <button
-        data-testid="empty-add-warehouse"
-        onClick={onAdd}
-        className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-      >
-        Ajouter un entrepôt
-      </button>
-    </div>
-  );
-}
-
-function WarehouseDialog({
-  open,
-  onClose,
+function WarehouseForm({
   initial,
   onSubmit,
   isPending,
   error,
 }: {
-  open: boolean;
-  onClose: () => void;
   initial?: Partial<WarehouseFormData>;
   onSubmit: (data: WarehouseFormData) => void;
   isPending: boolean;
@@ -129,147 +104,56 @@ function WarehouseDialog({
     isDefault: initial?.isDefault ?? false,
   });
 
-  React.useEffect(() => {
-    if (open) {
-      setForm({
-        name: initial?.name ?? '',
-        address: initial?.address ?? '',
-        isDefault: initial?.isDefault ?? false,
-      });
-    }
-  }, [open, initial?.name, initial?.address, initial?.isDefault]);
-
-  if (!open) return null;
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={initial?.name ? 'Modifier l\'entrepôt' : 'Nouvel entrepôt'}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(form);
+      }}
+      className="flex flex-col gap-5"
     >
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">
-          {initial?.name ? 'Modifier l\'entrepôt' : 'Nouvel entrepôt'}
-        </h2>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSubmit(form);
-          }}
-          className="space-y-4"
-        >
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="wh-name">
-              Nom <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="wh-name"
-              type="text"
-              required
-              maxLength={100}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="wh-address">
-              Adresse
-            </label>
-            <input
-              id="wh-address"
-              type="text"
-              maxLength={255}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.address}
-              onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              id="wh-default"
-              type="checkbox"
-              className="h-4 w-4 rounded border-gray-300 text-blue-600"
-              checked={form.isDefault}
-              onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))}
-            />
-            <label htmlFor="wh-default" className="text-sm text-gray-700">
-              Entrepôt par défaut
-            </label>
-          </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={isPending}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isPending ? 'Enregistrement…' : 'Enregistrer'}
-            </button>
-          </div>
-        </form>
+      <div className="space-y-1.5">
+        <Label htmlFor="wh-name">Nom *</Label>
+        <Input
+          id="wh-name"
+          type="text"
+          required
+          maxLength={100}
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+        />
       </div>
-    </div>
-  );
-}
 
-function DeleteDialog({
-  open,
-  warehouseName,
-  onCancel,
-  onConfirm,
-  isPending,
-  error,
-}: {
-  open: boolean;
-  warehouseName: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Confirmer la suppression"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">Supprimer l'entrepôt</h2>
-        <p className="mb-4 text-sm text-gray-600">
-          Voulez-vous vraiment supprimer l'entrepôt{' '}
-          <span className="font-semibold text-gray-900">"{warehouseName}"</span> ?
-          Cette action ne peut pas être annulée.
-        </p>
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Annuler
-          </button>
-          <button
-            data-testid="confirm-delete"
-            onClick={onConfirm}
-            disabled={isPending}
-            className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            {isPending ? 'Suppression…' : 'Supprimer'}
-          </button>
-        </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="wh-address">Adresse</Label>
+        <Input
+          id="wh-address"
+          type="text"
+          maxLength={255}
+          value={form.address}
+          onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+        />
       </div>
-    </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          id="wh-default"
+          type="checkbox"
+          className="h-4 w-4 rounded border-neutral-300 text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          checked={form.isDefault}
+          onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))}
+        />
+        <Label htmlFor="wh-default" className="font-normal text-neutral-700">
+          Entrepôt par défaut
+        </Label>
+      </div>
+
+      {error && <p className="text-[13px] text-danger-600">{error}</p>}
+
+      <Button type="submit" disabled={isPending} loading={isPending} size="lg">
+        {!isPending && 'Enregistrer'}
+      </Button>
+    </form>
   );
 }
 
@@ -325,133 +209,175 @@ export function WarehousesPage() {
 
   const activeError = editTarget ? updateWh.error : createWh.error;
   const isPendingForm = editTarget ? updateWh.isPending : createWh.isPending;
+  const rows = data?.data ?? [];
   const totalPages = data ? Math.ceil(data.total / limit) : 1;
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Entrepôts</h1>
-        <button
-          data-testid="add-warehouse"
-          onClick={openCreate}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-        >
-          Nouvel entrepôt
-        </button>
-      </div>
+    <div className="mx-auto max-w-6xl p-8">
+      <PageHeader
+        title="Entrepôts"
+        description="Emplacements de stock de l'organisation."
+        action={
+          <Button data-testid="add-warehouse" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nouvel entrepôt
+          </Button>
+        }
+      />
 
-      {/* État erreur */}
+      {/* ── État chargement ───────────────────────────────────────────────── */}
+      {isLoading && <TableSkeleton columns={4} />}
+
+      {/* ── État erreur ───────────────────────────────────────────────────── */}
       {isError && (
-        <ErrorBanner
-          message={(error as Error).message ?? 'Impossible de charger les entrepôts.'}
+        <ErrorState
+          message={(error as Error).message || 'Impossible de charger les entrepôts.'}
           onRetry={() => void refetch()}
         />
       )}
 
-      {/* Tableau */}
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              {['Nom', 'Adresse', 'Par défaut', 'Actions'].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500"
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {/* État chargement */}
-            {isLoading && [1, 2, 3].map((i) => <SkeletonRow key={i} />)}
+      {/* ── État vide ────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length === 0 && (
+        <EmptyState
+          icon={WarehouseIcon}
+          title="Aucun entrepôt"
+          description="Créez votre premier entrepôt pour commencer à gérer votre stock."
+          action={
+            <Button data-testid="empty-add-warehouse" onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              Ajouter un entrepôt
+            </Button>
+          }
+        />
+      )}
 
-            {/* État succès */}
-            {!isLoading && !isError && data?.data.map((wh) => (
-              <tr key={wh.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{wh.name}</td>
-                <td className="px-4 py-3 text-gray-500">{wh.address ?? '—'}</td>
-                <td className="px-4 py-3">
-                  {wh.isDefault && (
-                    <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
-                      Par défaut
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
+      {/* ── Liste ────────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Nom</TableHead>
+              <TableHead>Adresse</TableHead>
+              <TableHead>Par défaut</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((wh) => (
+              <TableRow key={wh.id}>
+                <TableCell className="font-semibold text-neutral-900">{wh.name}</TableCell>
+                <TableCell className="text-neutral-500">{wh.address ?? '—'}</TableCell>
+                <TableCell>
+                  {wh.isDefault && <Badge variant="info">Par défaut</Badge>}
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       aria-label={`Modifier ${wh.name}`}
                       onClick={() => openEdit(wh)}
-                      className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
                     >
-                      Modifier
-                    </button>
-                    <button
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-danger-600 hover:bg-danger-50"
                       aria-label={`Supprimer ${wh.name}`}
                       onClick={() => setDeleteTarget(wh)}
-                      className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                     >
-                      Supprimer
-                    </button>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
+      )}
 
-        {/* État vide */}
-        {!isLoading && !isError && (!data?.data || data.data.length === 0) && (
-          <EmptyState onAdd={openCreate} />
-        )}
-      </div>
-
-      {/* État partiel — pagination */}
+      {/* ── État partiel — pagination ────────────────────────────────────── */}
       {!isLoading && !isError && data && data.total > limit && (
-        <div className="flex items-center justify-between text-sm text-gray-600">
+        <div className="mt-4 flex items-center justify-between text-[13px] text-neutral-500">
           <span>
             {(page - 1) * limit + 1}–{Math.min(page * limit, data.total)} sur {data.total} entrepôts
           </span>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Précédent
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Suivant
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Modal CRUD */}
-      <WarehouseDialog
-        open={dialogOpen}
-        onClose={closeDialog}
-        initial={editTarget ? { name: editTarget.name, address: editTarget.address ?? '', isDefault: editTarget.isDefault } : undefined}
-        onSubmit={handleSubmit}
-        isPending={isPendingForm}
-        error={activeError ? (activeError as Error).message : null}
-      />
+      {/* ── Sheet création / édition ────────────────────────────────────── */}
+      <Sheet open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{editTarget ? "Modifier l'entrepôt" : 'Nouvel entrepôt'}</SheetTitle>
+            <SheetDescription>
+              {editTarget ? 'Modifiez les informations de cet entrepôt.' : 'Créez un nouvel emplacement de stock.'}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <WarehouseForm
+              initial={editTarget ? { name: editTarget.name, address: editTarget.address ?? '', isDefault: editTarget.isDefault } : undefined}
+              onSubmit={handleSubmit}
+              isPending={isPendingForm}
+              error={activeError ? (activeError as Error).message : null}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
-      {/* AlertDialog suppression */}
-      <DeleteDialog
-        open={!!deleteTarget}
-        warehouseName={deleteTarget?.name ?? ''}
-        onCancel={() => { setDeleteTarget(null); deleteWh.reset(); }}
-        onConfirm={handleDelete}
-        isPending={deleteWh.isPending}
-        error={deleteWh.error ? (deleteWh.error as Error).message : null}
-      />
+      {/* ── AlertDialog suppression ─────────────────────────────────────── */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null);
+            deleteWh.reset();
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer l'entrepôt {deleteTarget?.name ?? ''} ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Voulez-vous vraiment supprimer l'entrepôt "{deleteTarget?.name ?? ''}" ? Cette action ne peut pas être annulée.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteWh.error && (
+            <p className="text-[13px] text-danger-600">{(deleteWh.error as Error).message}</p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setDeleteTarget(null); deleteWh.reset(); }}>
+              Annuler
+            </AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="confirm-delete"
+              disabled={deleteWh.isPending}
+              onClick={handleDelete}
+            >
+              {deleteWh.isPending ? 'Suppression…' : 'Supprimer'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

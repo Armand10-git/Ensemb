@@ -100,8 +100,7 @@ describe('ProductsPage', () => {
     // get ne résout jamais → état chargement permanent
     mockApi.get.mockReturnValue(new Promise(() => undefined));
     renderPage();
-    const busy = document.querySelectorAll('[aria-busy="true"]');
-    expect(busy.length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   // ── État succès ───────────────────────────────────────────────────────────

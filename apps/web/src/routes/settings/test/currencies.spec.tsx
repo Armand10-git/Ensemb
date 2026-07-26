@@ -67,8 +67,7 @@ describe('CurrenciesPage', () => {
   it('affiche les lignes skeleton pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    const skeletonDivs = document.querySelectorAll('.bg-gray-200.rounded');
-    expect(skeletonDivs.length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   it('affiche la liste des devises avec code, nom et symbole', async () => {
@@ -95,7 +94,7 @@ describe('CurrenciesPage', () => {
     mockApi.get.mockRejectedValue(new Error('Serveur indisponible'));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText('Serveur indisponible')).toBeInTheDocument();
       expect(screen.getByText(/réessayer/i)).toBeInTheDocument();
     });
   });

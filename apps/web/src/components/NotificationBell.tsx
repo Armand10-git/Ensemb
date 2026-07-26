@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
+import { Bell, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api';
+import { cn } from '../lib/utils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -38,25 +40,6 @@ function relativeTime(iso: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `il y a ${hours} h`;
   return `il y a ${Math.floor(hours / 24)} j`;
-}
-
-function BellIcon({ className }: { className?: string }): React.ReactElement {
-  return (
-    <svg
-      className={className}
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      strokeWidth={1.5}
-      stroke="currentColor"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"
-      />
-    </svg>
-  );
 }
 
 // ─── Composant principal ──────────────────────────────────────────────────────
@@ -155,11 +138,11 @@ export function NotificationBell(): React.ReactElement {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
-        className="relative p-2 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+        className="relative rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 focus-visible:outline-none"
       >
-        <BellIcon className="h-6 w-6 text-gray-600" />
+        <Bell className="h-5 w-5" strokeWidth={1.8} />
         {unreadCount > 0 && (
-          <span className="absolute top-1 right-1 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 text-xs font-bold text-white bg-red-500 rounded-full">
+          <span className="absolute right-1 top-1 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-danger-600 px-1 text-[10px] font-bold text-white">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
@@ -170,17 +153,17 @@ export function NotificationBell(): React.ReactElement {
         <div
           role="dialog"
           aria-label="Panel notifications"
-          className="absolute right-0 mt-2 w-96 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden"
+          className="absolute right-0 z-50 mt-2 w-96 overflow-hidden rounded-card border border-neutral-200 bg-white shadow-2 animate-in fade-in-0 zoom-in-95"
         >
           {/* En-tête */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">Notifications</h2>
+          <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
+            <h2 className="font-display text-[14px] font-semibold text-neutral-800">Notifications</h2>
             {unreadCount > 0 && (
               <button
                 type="button"
                 onClick={() => markAllReadMutation.mutate()}
                 disabled={markAllReadMutation.isPending}
-                className="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+                className="text-[12.5px] font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
               >
                 Tout marquer comme lu
               </button>
@@ -188,16 +171,16 @@ export function NotificationBell(): React.ReactElement {
           </div>
 
           {/* Corps */}
-          <div className="max-h-96 overflow-y-auto divide-y divide-gray-100">
+          <div className="max-h-96 divide-y divide-neutral-100 overflow-y-auto">
             {listLoading && (
-              <div className="flex items-center justify-center h-24 text-sm text-gray-400">
+              <div className="flex h-24 items-center justify-center text-[13px] text-neutral-400">
                 Chargement…
               </div>
             )}
 
             {!listLoading && notifications.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-24 text-sm text-gray-400 gap-1">
-                <BellIcon className="h-8 w-8 opacity-30" />
+              <div className="flex h-24 flex-col items-center justify-center gap-1.5 text-[13px] text-neutral-400">
+                <Bell className="h-7 w-7 opacity-30" strokeWidth={1.5} />
                 <span>Aucune notification</span>
               </div>
             )}
@@ -207,28 +190,27 @@ export function NotificationBell(): React.ReactElement {
                 key={n.id}
                 type="button"
                 onClick={() => handleNotificationClick(n)}
-                className={[
-                  'w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors',
-                  n.readAt ? 'bg-white' : 'bg-indigo-50',
-                ].join(' ')}
+                className={cn(
+                  'w-full px-4 py-3 text-left transition-colors hover:bg-neutral-50',
+                  !n.readAt && 'bg-brand-50/60',
+                )}
               >
                 <div className="flex items-start gap-3">
-                  {/* Icône type */}
-                  <span className="mt-0.5 text-amber-500 flex-shrink-0">⚠</span>
+                  <span className="mt-0.5 flex-shrink-0 text-amber-600">
+                    <TriangleAlert className="h-4 w-4" strokeWidth={1.8} />
+                  </span>
 
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-800 truncate">
+                    <p className="truncate text-[13.5px] font-medium text-neutral-800">
                       Stock bas&nbsp;: {n.payload.productName}
                     </p>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    <p className="mt-0.5 text-[12.5px] text-neutral-500">
                       {n.payload.currentQuantity} unités (seuil&nbsp;: {n.payload.threshold})
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">{relativeTime(n.createdAt)}</p>
+                    <p className="mt-1 text-[11.5px] text-neutral-400">{relativeTime(n.createdAt)}</p>
                   </div>
 
-                  {!n.readAt && (
-                    <span className="mt-1.5 h-2 w-2 rounded-full bg-indigo-500 flex-shrink-0" />
-                  )}
+                  {!n.readAt && <span className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full bg-brand-500" />}
                 </div>
               </button>
             ))}

@@ -1,6 +1,33 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { Plus, Upload, Download, Pencil, Trash2, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import { api } from '../../lib/api';
+import { cn } from '../../lib/utils';
+import { Button, buttonVariants } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Badge } from '../../components/ui/badge';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from '../../components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui/alert-dialog';
+import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,166 +126,110 @@ function useExportClients() {
 // ─── Utilitaire debounce ──────────────────────────────────────────────────────
 
 function useDebounce(value: string, delay = 300) {
-  const [debounced, setDebounced] = React.useState(value);
-  React.useEffect(() => {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
     const id = setTimeout(() => setDebounced(value), delay);
     return () => clearTimeout(id);
   }, [value, delay]);
   return debounced;
 }
 
-// ─── Composants atomiques ─────────────────────────────────────────────────────
-
-function SkeletonRow({ cols }: { cols: number }) {
-  return (
-    <tr className="animate-pulse" aria-busy="true">
-      {Array.from({ length: cols }).map((_, i) => (
-        <td key={i} className="px-4 py-3">
-          <div className="h-4 bg-gray-200 rounded w-full" />
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div role="alert" className="flex items-center justify-between rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800">
-      <span>{message}</span>
-      <button onClick={onRetry} className="ml-4 rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700">
-        Réessayer
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-      <p className="text-lg font-medium">Aucun client</p>
-      <p className="mt-1 text-sm">Créez votre premier client ou importez un fichier CSV.</p>
-      <button
-        data-testid="empty-add-client"
-        onClick={onAdd}
-        className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-      >
-        Nouveau client
-      </button>
-    </div>
-  );
-}
-
-function Toast({ message, type = 'info' }: { message: string; type?: 'info' | 'success' | 'error' }) {
-  const colors = {
-    info: 'bg-blue-600',
-    success: 'bg-green-600',
-    error: 'bg-red-600',
-  };
-  return (
-    <div className={`fixed bottom-6 right-6 z-50 rounded-lg px-5 py-3 text-white shadow-lg ${colors[type]}`} role="status">
-      {message}
-    </div>
-  );
-}
-
 // ─── Formulaire client ────────────────────────────────────────────────────────
 
-function ClientDialog({
-  open, onClose, initial, onSubmit, isPending, error,
+function ClientForm({
+  initial,
+  onSave,
+  saving,
+  error,
 }: {
-  open: boolean;
-  onClose: () => void;
   initial?: Partial<ClientFormData>;
-  onSubmit: (data: Partial<ClientFormData>) => void;
-  isPending: boolean;
+  onSave: (data: Partial<ClientFormData>) => void;
+  saving: boolean;
   error: string | null;
 }) {
   const empty: ClientFormData = { name: '', email: '', phone: '', country: '', city: '', address: '' };
-  const [form, setForm] = useState<ClientFormData>(empty);
+  const [form, setForm] = useState<ClientFormData>({ ...empty, ...(initial ?? {}) });
 
-  React.useEffect(() => {
-    if (open) setForm({ ...empty, ...(initial ?? {}) });
-  }, [open]);
-
-  if (!open) return null;
-
-  const isEdit = Boolean(initial && 'name' in initial);
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onSave(form);
+  }
 
   return (
-    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">
-          {isEdit ? 'Modifier le client' : 'Nouveau client'}
-        </h2>
-        {error && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit(form); }} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="cl-name">
-              Nom <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="cl-name"
-              required
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          {(['email', 'phone', 'country', 'city', 'address'] as const).map(field => (
-            <div key={field}>
-              <label className="block text-sm font-medium text-gray-700 capitalize" htmlFor={`cl-${field}`}>
-                {{ email: 'Email', phone: 'Téléphone', country: 'Pays', city: 'Ville', address: 'Adresse' }[field]}
-              </label>
-              <input
-                id={`cl-${field}`}
-                type={field === 'email' ? 'email' : 'text'}
-                value={form[field]}
-                onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))}
-                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          ))}
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="rounded-md border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-              Annuler
-            </button>
-            <button type="submit" disabled={isPending} className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50">
-              {isPending ? 'Enregistrement…' : 'Enregistrer'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ─── Dialog de confirmation de suppression ────────────────────────────────────
-
-function DeleteDialog({
-  client, onConfirm, onCancel, isPending,
-}: {
-  client: Client;
-  onConfirm: () => void;
-  onCancel: () => void;
-  isPending: boolean;
-}) {
-  return (
-    <div role="alertdialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="text-lg font-semibold text-gray-900">Supprimer le client</h2>
-        <p className="mt-2 text-sm text-gray-600">
-          Voulez-vous supprimer le client <strong>{client.name}</strong> ? Cette action est irréversible.
+    <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+      {error && (
+        <p className="rounded-card border border-danger-200 bg-danger-50 px-3.5 py-2.5 text-[13px] text-danger-700">
+          {error}
         </p>
-        <div className="mt-4 flex justify-end gap-3">
-          <button onClick={onCancel} className="rounded-md border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-            Annuler
-          </button>
-          <button onClick={onConfirm} disabled={isPending} className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50">
-            {isPending ? 'Suppression…' : 'Supprimer'}
-          </button>
+      )}
+
+      <div className="space-y-1.5">
+        <Label htmlFor="cl-name">
+          Nom <span className="text-danger-600">*</span>
+        </Label>
+        <Input
+          id="cl-name"
+          required
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="cl-email">Email</Label>
+          <Input
+            id="cl-email"
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cl-phone">Téléphone</Label>
+          <Input
+            id="cl-phone"
+            value={form.phone}
+            onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+          />
         </div>
       </div>
-    </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="cl-country">Pays</Label>
+          <Input
+            id="cl-country"
+            value={form.country}
+            onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cl-city">Ville</Label>
+          <Input
+            id="cl-city"
+            value={form.city}
+            onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="cl-address">Adresse</Label>
+        <Input
+          id="cl-address"
+          value={form.address}
+          onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+        />
+      </div>
+
+      <SheetFooter className="border-0 px-0 pb-0 pt-2">
+        <Button type="submit" disabled={saving} loading={saving}>
+          {!saving && 'Enregistrer'}
+          {saving && 'Enregistrement…'}
+        </Button>
+      </SheetFooter>
+    </form>
   );
 }
 
@@ -267,23 +238,24 @@ function DeleteDialog({
 function ImportReportPanel({ report }: { report: ImportReport }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4" data-testid="import-report">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-blue-800">
+    <div className="rounded-card border border-info-200 bg-info-50 p-4" data-testid="import-report">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[13px] font-medium text-info-700">
           Import terminé — {report.imported} client(s) importé(s)
           {report.errors.length > 0 && `, ${report.errors.length} ligne(s) ignorée(s)`}
-        </span>
+        </p>
         {report.errors.length > 0 && (
-          <button onClick={() => setOpen(o => !o)} className="text-xs text-blue-600 underline">
+          <Button variant="ghost" size="sm" onClick={() => setOpen((o) => !o)} type="button">
             {open ? 'Masquer' : 'Voir les erreurs'}
-          </button>
+          </Button>
         )}
       </div>
       {open && report.errors.length > 0 && (
-        <ul className="mt-3 space-y-1" data-testid="import-errors">
-          {report.errors.map(e => (
-            <li key={e.line} className="text-xs text-red-700">
-              Ligne {e.line} : {e.message}
+        <ul className="mt-3 flex flex-col gap-1.5" data-testid="import-errors">
+          {report.errors.map((e) => (
+            <li key={e.line} className="flex items-center gap-2 text-[12.5px] text-neutral-700">
+              <Badge variant="danger">Ligne {e.line}</Badge>
+              {e.message}
             </li>
           ))}
         </ul>
@@ -296,43 +268,42 @@ function ImportReportPanel({ report }: { report: ImportReport }) {
 
 export default function CustomersPage() {
   const qc = useQueryClient();
-  const [page, setPage]             = useState(1);
+  const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebounce(searchInput, 300);
 
   const [dialogOpen, setDialogOpen]       = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [deletingClient, setDeletingClient] = useState<Client | null>(null);
-
-  const [importReport, setImportReport] = useState<ImportReport | null>(null);
-  const [toast, setToast]               = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const [importReport, setImportReport]   = useState<ImportReport | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, isError, error, refetch } = useClients(page, 20, search);
-  const createMut  = useCreateClient();
-  const updateMut  = useUpdateClient();
-  const deleteMut  = useDeleteClient();
-  const importMut  = useImportClients();
-  const exportMut  = useExportClients();
-
-  const showToast = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
+  const createMut = useCreateClient();
+  const updateMut = useUpdateClient();
+  const deleteMut = useDeleteClient();
+  const importMut = useImportClients();
+  const exportMut = useExportClients();
 
   // Réinitialise la page si la recherche change
-  React.useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search]);
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditingClient(null);
+  }
 
   const handleSubmit = (form: Partial<ClientFormData>) => {
     if (editingClient) {
-      updateMut.mutate({ id: editingClient.id, data: form }, {
-        onSuccess: () => { setDialogOpen(false); setEditingClient(null); },
-      });
+      updateMut.mutate({ id: editingClient.id, data: form }, { onSuccess: closeDialog });
     } else {
-      createMut.mutate(form, {
-        onSuccess: () => { setDialogOpen(false); },
-      });
+      createMut.mutate(form, { onSuccess: closeDialog });
     }
+  };
+
+  const handleDelete = () => {
+    if (!deletingClient) return;
+    deleteMut.mutate(deletingClient.id, { onSuccess: () => setDeletingClient(null) });
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -343,209 +314,242 @@ export default function CustomersPage() {
         setImportReport(report);
         void qc.invalidateQueries({ queryKey: ['clients'] });
       },
-      onError: (err) => { showToast(err.message, 'error'); },
+      onError: (err) => { toast.error(err.message); },
     });
     e.target.value = '';
   };
 
   const handleExport = () => {
     exportMut.mutate(undefined, {
-      onSuccess: () => {
-        showToast("Export en cours… Vous serez notifié lorsqu'il sera prêt.", 'info');
-      },
-      onError: (err) => { showToast(err.message, 'error'); },
+      onSuccess: () => { toast.info("Export en cours… Vous serez notifié lorsqu'il sera prêt."); },
+      onError: (err) => { toast.error(err.message); },
     });
   };
 
   const totalPages = data ? Math.ceil(data.total / data.limit) : 0;
-  const isEmpty    = !isLoading && !isError && data?.data?.length === 0;
+  const rows        = data?.data ?? [];
+  const isEmpty      = !isLoading && !isError && rows.length === 0;
 
   return (
-    <div className="mx-auto max-w-6xl p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
-        <div className="flex gap-2">
-          <a
-            href="/api/v1/partners/clients/template"
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Télécharger le modèle CSV
-          </a>
-          <button
-            data-testid="import-csv-btn"
-            onClick={() => fileRef.current?.click()}
-            disabled={importMut.isPending}
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {importMut.isPending ? 'Import…' : 'Importer CSV'}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={handleImport}
-            data-testid="csv-file-input"
-          />
-          <button
-            data-testid="export-excel-btn"
-            onClick={handleExport}
-            disabled={exportMut.isPending}
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            Exporter Excel
-          </button>
-          <button
-            data-testid="add-client-btn"
-            onClick={() => { setEditingClient(null); setDialogOpen(true); }}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-          >
-            Nouveau client
-          </button>
-        </div>
-      </div>
+    <div className="mx-auto max-w-6xl p-8">
+      <PageHeader
+        title="Clients"
+        description="Vos clients et leurs coordonnées."
+        action={
+          <div className="flex flex-wrap gap-2">
+            <a
+              href="/api/v1/partners/clients/template"
+              className={cn(buttonVariants({ variant: 'secondary' }))}
+            >
+              <Download className="h-4 w-4" />
+              Télécharger le modèle CSV
+            </a>
+            <Button
+              variant="secondary"
+              type="button"
+              data-testid="import-csv-btn"
+              onClick={() => fileRef.current?.click()}
+              disabled={importMut.isPending}
+              loading={importMut.isPending}
+            >
+              {!importMut.isPending && <Upload className="h-4 w-4" />}
+              {importMut.isPending ? 'Import…' : 'Importer CSV'}
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => void handleImport(e)}
+              data-testid="csv-file-input"
+            />
+            <Button
+              variant="secondary"
+              type="button"
+              data-testid="export-excel-btn"
+              onClick={handleExport}
+              disabled={exportMut.isPending}
+              loading={exportMut.isPending}
+            >
+              {!exportMut.isPending && <Download className="h-4 w-4" />}
+              Exporter Excel
+            </Button>
+            <Button
+              data-testid="add-client-btn"
+              onClick={() => { setEditingClient(null); setDialogOpen(true); }}
+            >
+              <Plus className="h-4 w-4" />
+              Nouveau client
+            </Button>
+          </div>
+        }
+      />
 
-      {/* Barre de recherche */}
+      {/* ── Barre de recherche ───────────────────────────────────────────── */}
       <div className="mb-4">
-        <input
+        <Input
           data-testid="search-input"
           type="search"
           placeholder="Rechercher par nom ou email…"
           value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          className="w-full max-w-sm rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onChange={(e) => setSearchInput(e.target.value)}
+          className="max-w-sm"
         />
       </div>
 
-      {/* Rapport d'import */}
+      {/* ── Rapport d'import ─────────────────────────────────────────────── */}
       {importReport && <div className="mb-4"><ImportReportPanel report={importReport} /></div>}
 
-      {/* États chargement / erreur / vide / tableau */}
+      {/* ── État chargement ──────────────────────────────────────────────── */}
+      {isLoading && <TableSkeleton columns={6} />}
+
+      {/* ── État erreur ──────────────────────────────────────────────────── */}
       {isError && (
-        <ErrorBanner
-          message={(error as Error).message ?? 'Erreur lors du chargement des clients.'}
+        <ErrorState
+          message={(error as Error).message || 'Impossible de charger les clients.'}
           onRetry={() => void refetch()}
         />
       )}
 
-      {!isError && (
-        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
-          <table className="w-full text-sm" data-testid="clients-table">
-            <thead className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-              <tr>
-                <th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Nom</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Téléphone</th>
-                <th className="px-4 py-3">Ville</th>
-                <th className="px-4 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {isLoading
-                ? Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} cols={6} />)
-                : isEmpty
-                  ? (
-                    <tr>
-                      <td colSpan={6}>
-                        <EmptyState onAdd={() => { setEditingClient(null); setDialogOpen(true); }} />
-                      </td>
-                    </tr>
-                  )
-                  : data?.data.map(client => (
-                    <tr key={client.id} className="hover:bg-gray-50" data-testid="client-row">
-                      <td className="px-4 py-3">
-                        <span className="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs">{client.code}</span>
-                      </td>
-                      <td className="px-4 py-3 font-medium text-gray-900">{client.name}</td>
-                      <td className="px-4 py-3 text-gray-600">{client.email ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{client.phone ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{client.city ?? '—'}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => { setEditingClient(client); setDialogOpen(true); }}
-                            className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
-                          >
-                            Éditer
-                          </button>
-                          <button
-                            onClick={() => setDeletingClient(client)}
-                            className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-              }
-            </tbody>
-          </table>
-        </div>
+      {/* ── État vide ────────────────────────────────────────────────────── */}
+      {isEmpty && (
+        <EmptyState
+          icon={Users}
+          title="Aucun client"
+          description="Créez votre premier client ou importez un fichier CSV."
+          action={
+            <Button data-testid="empty-add-client" onClick={() => { setEditingClient(null); setDialogOpen(true); }}>
+              <Plus className="h-4 w-4" />
+              Nouveau client
+            </Button>
+          }
+        />
       )}
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
+      {/* ── Liste ────────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && !isEmpty && (
+        <Table data-testid="clients-table">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Code</TableHead>
+              <TableHead>Nom</TableHead>
+              <TableHead>Email</TableHead>
+              <TableHead>Téléphone</TableHead>
+              <TableHead>Ville</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((client) => (
+              <TableRow key={client.id} data-testid="client-row">
+                <TableCell className="tabular font-mono text-[12.5px] text-neutral-500">{client.code}</TableCell>
+                <TableCell className="font-semibold text-neutral-900">{client.name}</TableCell>
+                <TableCell className="text-neutral-600">{client.email ?? '—'}</TableCell>
+                <TableCell className="text-neutral-600">{client.phone ?? '—'}</TableCell>
+                <TableCell className="text-neutral-600">{client.city ?? '—'}</TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Modifier ${client.name}`}
+                      onClick={() => { setEditingClient(client); setDialogOpen(true); }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-danger-600 hover:bg-danger-50"
+                      aria-label={`Supprimer ${client.name}`}
+                      onClick={() => setDeletingClient(client)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {/* ── Pagination ───────────────────────────────────────────────────── */}
+      {!isLoading && !isError && totalPages > 1 && data && (
+        <div className="mt-4 flex items-center justify-between text-[13px] text-neutral-500">
           <span>
-            {data ? `${(page - 1) * data.limit + 1}–${Math.min(page * data.limit, data.total)} sur ${data.total} clients` : ''}
+            {(page - 1) * data.limit + 1}–{Math.min(page * data.limit, data.total)} sur {data.total} clients
           </span>
           <div className="flex gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
+              <ChevronLeft className="h-3.5 w-3.5" />
               Précédent
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Suivant
-            </button>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Dialogs */}
-      <ClientDialog
-        open={dialogOpen}
-        onClose={() => { setDialogOpen(false); setEditingClient(null); }}
-        initial={editingClient ? {
-          name:    editingClient.name,
-          email:   editingClient.email   ?? undefined,
-          phone:   editingClient.phone   ?? undefined,
-          country: editingClient.country ?? undefined,
-          city:    editingClient.city    ?? undefined,
-          address: editingClient.address ?? undefined,
-        } : undefined}
-        onSubmit={handleSubmit}
-        isPending={createMut.isPending || updateMut.isPending}
-        error={
-          createMut.error ? (createMut.error as Error).message
-          : updateMut.error ? (updateMut.error as Error).message
-          : null
-        }
-      />
+      {/* ── Sheet création / édition ────────────────────────────────────── */}
+      <Sheet open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{editingClient ? 'Modifier le client' : 'Nouveau client'}</SheetTitle>
+            <SheetDescription>Nom, coordonnées et adresse du client.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <ClientForm
+              key={editingClient?.id ?? 'new'}
+              initial={editingClient ? {
+                name:    editingClient.name,
+                email:   editingClient.email   ?? undefined,
+                phone:   editingClient.phone   ?? undefined,
+                country: editingClient.country ?? undefined,
+                city:    editingClient.city    ?? undefined,
+                address: editingClient.address ?? undefined,
+              } : undefined}
+              onSave={handleSubmit}
+              saving={createMut.isPending || updateMut.isPending}
+              error={
+                createMut.error ? (createMut.error as Error).message
+                : updateMut.error ? (updateMut.error as Error).message
+                : null
+              }
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
-      {deletingClient && (
-        <DeleteDialog
-          client={deletingClient}
-          onConfirm={() => {
-            deleteMut.mutate(deletingClient.id, {
-              onSuccess: () => setDeletingClient(null),
-            });
-          }}
-          onCancel={() => setDeletingClient(null)}
-          isPending={deleteMut.isPending}
-        />
-      )}
-
-      {/* Toast */}
-      {toast && <Toast message={toast.message} type={toast.type} />}
+      {/* ── AlertDialog suppression ─────────────────────────────────────── */}
+      <AlertDialog open={deletingClient !== null} onOpenChange={(open) => !open && setDeletingClient(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer le client {deletingClient?.name ?? ''} ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible. Le client sera définitivement supprimé.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeletingClient(null)}>Annuler</AlertDialogCancel>
+            <AlertDialogAction disabled={deleteMut.isPending} onClick={handleDelete}>
+              {deleteMut.isPending ? 'Suppression…' : 'Supprimer'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

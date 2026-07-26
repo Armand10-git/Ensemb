@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import SalesPage from '../index';
+import { Toaster } from '../../../components/ui/sonner';
 
 // ─── Mock API ─────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <SalesPage />
+      <Toaster />
     </QueryClientProvider>,
   );
 }
@@ -91,8 +93,7 @@ describe('SalesPage', () => {
   it('affiche des skeletons pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => undefined));
     renderPage();
-    const skeletons = document.querySelectorAll('div[style*="shimmer"]');
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   // ── État vide ─────────────────────────────────────────────────────────────
@@ -118,13 +119,13 @@ describe('SalesPage', () => {
 
   // ── Formulaire de création ────────────────────────────────────────────────
 
-  it('ouvre le Sheet de création en cliquant sur "+ Nouvelle vente"', async () => {
+  it('ouvre le Sheet de création en cliquant sur "Nouvelle vente"', async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouvelle vente'));
+    await waitFor(() => screen.getByText('Nouvelle vente'));
 
-    await userEvent.click(screen.getAllByText('+ Nouvelle vente')[0]!);
+    await userEvent.click(screen.getAllByText('Nouvelle vente')[0]!);
 
-    await waitFor(() => expect(screen.getByText('Nouvelle vente')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Nouvelle vente').length).toBeGreaterThan(1));
     expect(screen.getByText('Enregistrer')).toBeInTheDocument();
   });
 
@@ -134,8 +135,8 @@ describe('SalesPage', () => {
     mockApi.post.mockResolvedValue(makeSale());
 
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouvelle vente'));
-    await userEvent.click(screen.getAllByText('+ Nouvelle vente')[0]!);
+    await waitFor(() => screen.getByText('Nouvelle vente'));
+    await userEvent.click(screen.getAllByText('Nouvelle vente')[0]!);
 
     await waitFor(() => screen.getByTestId('client-select'));
 

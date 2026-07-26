@@ -4,6 +4,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import SuppliersPage from '../suppliers';
+import { Toaster } from '../../../components/ui/sonner';
 
 // ─── Mock API ─────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <SuppliersPage />
+      <Toaster />
     </QueryClientProvider>,
   );
 }
@@ -68,8 +70,7 @@ describe('SuppliersPage', () => {
   it('affiche les skeletons pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    const skeletons = document.querySelectorAll('[aria-busy="true"]');
-    expect(skeletons.length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   it('affiche l\'état vide avec le CTA "Nouveau fournisseur"', async () => {
@@ -140,7 +141,7 @@ describe('SuppliersPage', () => {
     await user.click(screen.getByTestId('export-excel-btn'));
 
     await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.getByText(/Export en cours/i)).toBeInTheDocument();
     });
   });
 
@@ -148,7 +149,7 @@ describe('SuppliersPage', () => {
     mockApi.get.mockRejectedValue(new Error('Erreur serveur'));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText('Erreur serveur')).toBeInTheDocument();
       expect(screen.getByText(/réessayer/i)).toBeInTheDocument();
     });
   });
