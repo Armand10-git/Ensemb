@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { AlertCircle, ArrowRight } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
 
@@ -51,73 +55,83 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-600 mb-3">
-            <span className="text-white text-sm font-bold">E</span>
+    <div className="flex min-h-screen items-center justify-center bg-brand-950 p-4">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(47,167,94,0.25),transparent_55%),radial-gradient(circle_at_85%_75%,rgba(47,167,94,0.15),transparent_50%)]" />
+
+      <div className="relative w-full max-w-sm">
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-card bg-brand-500 shadow-2">
+            <span className="font-display text-base font-bold text-white">E</span>
           </div>
-          <h1 className="text-xl font-bold text-gray-900">Ensemb</h1>
-          <p className="text-sm text-gray-500 mt-1">Connectez-vous à votre espace</p>
+          <h1 className="font-display text-2xl font-semibold text-white">Ensemb</h1>
+          <p className="mt-1 text-[13.5px] text-brand-200/80">Gestion de vente &amp; suivi de stock</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="rounded-card border border-white/10 bg-white p-6 shadow-2 space-y-4">
           {error && (
-            <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-              {error}
+            <div className="flex items-start gap-2 rounded-field border border-danger-200 bg-danger-50 px-3.5 py-2.5 text-[13px] text-danger-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              Sous-domaine de l'organisation
-            </label>
-            <div className="flex rounded-lg border border-gray-300 overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500">
+          <div className="space-y-1.5">
+            <Label htmlFor="subdomain">Sous-domaine de l&apos;organisation</Label>
+            <div className="flex overflow-hidden rounded-field border border-neutral-300 shadow-1 focus-within:border-brand-500">
               <input
+                id="subdomain"
                 type="text"
                 value={subdomain}
-                onChange={e => setSubdomain(e.target.value)}
+                onChange={(e) => setSubdomain(e.target.value)}
                 placeholder="monentreprise"
                 required
                 autoFocus
-                className="flex-1 px-3 py-2 text-sm outline-none bg-white"
+                className="flex-1 bg-white px-3 py-1.5 text-[14px] text-neutral-900 outline-none placeholder:text-neutral-400"
               />
-              <span className="flex items-center px-3 text-xs text-gray-400 bg-gray-50 border-l border-gray-200">.ensemb.cm</span>
+              <span className="flex items-center border-l border-neutral-200 bg-neutral-50 px-3 text-[12.5px] text-neutral-400">
+                .ensemb.cm
+              </span>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">Adresse e-mail</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Adresse e-mail</Label>
+            <Input
+              id="email"
               type="email"
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
               placeholder="vous@exemple.com"
               required
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">Mot de passe</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="password">Mot de passe</Label>
+            <Input
+              id="password"
               type="password"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-indigo-600 text-white text-sm font-medium py-2.5 hover:bg-indigo-700 active:bg-indigo-800 disabled:opacity-60 transition-colors mt-2"
-          >
-            {loading ? 'Connexion…' : 'Se connecter'}
-          </button>
+          <Button type="submit" className="mt-2 w-full" loading={loading}>
+            {!loading && (
+              <>
+                Se connecter
+                <ArrowRight />
+              </>
+            )}
+            {loading && 'Connexion…'}
+          </Button>
         </form>
+
+        <p className="mt-6 text-center text-[12.5px] text-brand-200/60">
+          Ensemb © {new Date().getFullYear()} — Cameroun
+        </p>
       </div>
     </div>
   );

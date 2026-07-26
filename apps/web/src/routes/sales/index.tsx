@@ -1,6 +1,34 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText } from 'lucide-react';
 import { api } from '../../lib/api';
+import { cn, formatXAF, formatDate } from '../../lib/utils';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Textarea } from '../../components/ui/textarea';
+import { NativeSelect } from '../../components/ui/native-select';
+import { Badge } from '../../components/ui/badge';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '../../components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui/alert-dialog';
+import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -55,8 +83,6 @@ interface DetailFormRow {
   discount: string;
   taxAmount: string;
 }
-
-interface Toast { id: number; message: string; type: 'success' | 'error' }
 
 // ─── API Hooks ───────────────────────────────────────────────────────────────
 
@@ -129,16 +155,6 @@ function useDeleteSale() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-
-function formatXAF(value: string | number): string {
-  const n = typeof value === 'string' ? parseFloat(value) : value;
-  if (Number.isNaN(n)) return '—';
-  return `${n.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} XAF`;
-}
-
 function makeEmptyRow(): DetailFormRow {
   return { productId: '', quantity: '', price: '', discount: '0', taxAmount: '0' };
 }
@@ -153,171 +169,27 @@ function computeLinePreview(row: DetailFormRow): number {
   return subTotal + tax - discount;
 }
 
-// ─── Toast ───────────────────────────────────────────────────────────────────
-
-function ToastList({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
-  return (
-    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          style={{
-            background: t.type === 'success' ? '#16a34a' : '#dc2626',
-            color: '#fff',
-            padding: '12px 20px',
-            borderRadius: 8,
-            boxShadow: '0 4px 16px rgba(0,0,0,.18)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            minWidth: 280,
-          }}
-        >
-          <span style={{ flex: 1 }}>{t.message}</span>
-          <button onClick={() => onDismiss(t.id)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 18 }}>×</button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function useToast() {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const add = useCallback((message: string, type: 'success' | 'error' = 'success') => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
-  }, []);
-  const dismiss = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
-  return { toasts, add, dismiss };
-}
-
-// ─── Badges ──────────────────────────────────────────────────────────────────
+// ─── Badges de statut ──────────────────────────────────────────────────────────
 
 function PaymentBadge({ status }: { status: PaymentStatus }) {
-  const map: Record<PaymentStatus, { label: string; bg: string; fg: string; bd: string }> = {
-    UNPAID:  { label: 'Non payé', bg: '#fee2e2', fg: '#991b1b', bd: '#fca5a5' },
-    PARTIAL: { label: 'Partiel',  bg: '#fef9c3', fg: '#854d0e', bd: '#fde047' },
-    PAID:    { label: 'Payé',     bg: '#dcfce7', fg: '#15803d', bd: '#86efac' },
+  const map: Record<PaymentStatus, { label: string; variant: 'danger' | 'warning' | 'success' }> = {
+    UNPAID:  { label: 'Non payé', variant: 'danger' },
+    PARTIAL: { label: 'Partiel',  variant: 'warning' },
+    PAID:    { label: 'Payé',     variant: 'success' },
   };
   const s = map[status];
-  return (
-    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600, background: s.bg, color: s.fg, border: `1px solid ${s.bd}` }}>
-      {s.label}
-    </span>
-  );
+  return <Badge variant={s.variant}>{s.label}</Badge>;
 }
 
 function StatusBadge({ status }: { status: DocumentStatus }) {
-  const map: Record<DocumentStatus, { label: string; bg: string; fg: string; bd: string }> = {
-    PENDING:          { label: 'En attente',        bg: '#fef9c3', fg: '#854d0e', bd: '#fde047' },
-    AWAITING_PAYMENT: { label: 'Paiement en cours',  bg: '#dbeafe', fg: '#1e40af', bd: '#93c5fd' },
-    COMPLETED:        { label: 'Terminée',           bg: '#dcfce7', fg: '#15803d', bd: '#86efac' },
-    CANCELLED:        { label: 'Annulée',            bg: '#f3f4f6', fg: '#4b5563', bd: '#d1d5db' },
+  const map: Record<DocumentStatus, { label: string; variant: 'warning' | 'info' | 'success' | 'neutral' }> = {
+    PENDING:          { label: 'En attente',       variant: 'warning' },
+    AWAITING_PAYMENT: { label: 'Paiement en cours', variant: 'info' },
+    COMPLETED:        { label: 'Terminée',          variant: 'success' },
+    CANCELLED:        { label: 'Annulée',           variant: 'neutral' },
   };
   const s = map[status];
-  return (
-    <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600, background: s.bg, color: s.fg, border: `1px solid ${s.bd}` }}>
-      {s.label}
-    </span>
-  );
-}
-
-// ─── Skeleton ────────────────────────────────────────────────────────────────
-
-function Skeleton({ height = 24, width = '100%' }: { height?: number; width?: number | string }) {
-  return (
-    <div
-      style={{
-        height,
-        width,
-        background: 'linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%)',
-        backgroundSize: '200% 100%',
-        animation: 'shimmer 1.5s infinite',
-        borderRadius: 4,
-      }}
-    />
-  );
-}
-
-// ─── Sheet (panneau latéral) ─────────────────────────────────────────────────
-
-function Sheet({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <>
-      <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 1000 }}
-      />
-      <div
-        style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 640,
-          background: '#fff', zIndex: 1001, display: 'flex', flexDirection: 'column',
-          boxShadow: '-4px 0 24px rgba(0,0,0,.12)', overflowY: 'auto',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: '1px solid #e5e7eb' }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{title}</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
-        </div>
-        <div style={{ flex: 1, padding: '24px', overflowY: 'auto' }}>{children}</div>
-      </div>
-    </>
-  );
-}
-
-// ─── AlertDialog ─────────────────────────────────────────────────────────────
-
-function AlertDialog({
-  open,
-  title,
-  description,
-  confirmLabel,
-  onConfirm,
-  onCancel,
-  loading,
-}: {
-  open: boolean;
-  title: string;
-  description: string;
-  confirmLabel: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  loading: boolean;
-}) {
-  if (!open) return null;
-  return (
-    <>
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 2000 }} />
-      <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-        background: '#fff', borderRadius: 12, padding: '32px 28px', zIndex: 2001,
-        width: 420, boxShadow: '0 8px 32px rgba(0,0,0,.16)',
-      }}>
-        <h3 style={{ margin: '0 0 8px', fontSize: 17 }}>{title}</h3>
-        <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: 14 }}>{description}</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <button onClick={onCancel} disabled={loading} style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
-            Annuler
-          </button>
-          <button onClick={onConfirm} disabled={loading} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
-            {loading ? 'Suppression…' : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </>
-  );
+  return <Badge variant={s.variant}>{s.label}</Badge>;
 }
 
 // ─── Formulaire de création ───────────────────────────────────────────────────
@@ -343,11 +215,6 @@ function SaleForm({
   const [shipping, setShipping]       = useState('0');
   const [taxRate, setTaxRate]         = useState('0');
   const [rows, setRows]               = useState<DetailFormRow[]>([makeEmptyRow()]);
-
-  const fieldStyle: React.CSSProperties = {
-    width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db',
-    fontSize: 14, boxSizing: 'border-box',
-  };
 
   function setRow<K extends keyof DetailFormRow>(idx: number, key: K, value: DetailFormRow[K]) {
     setRows((prev) => prev.map((r, i) => i === idx ? { ...r, [key]: value } : r));
@@ -390,124 +257,115 @@ function SaleForm({
     && rows.every((r) => r.productId && r.quantity && r.price);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div>
-          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Client *</label>
-          <select value={clientId} onChange={(e) => setClientId(e.target.value)} style={fieldStyle} data-testid="client-select">
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Client *</Label>
+          <NativeSelect value={clientId} onChange={(e) => setClientId(e.target.value)} data-testid="client-select">
             <option value="">— Client —</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </NativeSelect>
         </div>
-        <div>
-          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Entrepôt *</label>
-          <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} style={fieldStyle} data-testid="warehouse-select">
+        <div className="space-y-1.5">
+          <Label>Entrepôt *</Label>
+          <NativeSelect value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} data-testid="warehouse-select">
             <option value="">— Entrepôt —</option>
             {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-          </select>
+          </NativeSelect>
         </div>
       </div>
 
-      <div>
-        <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Date *</label>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={fieldStyle} />
+      <div className="space-y-1.5">
+        <Label>Date *</Label>
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
       </div>
 
-      <div>
-        <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Note</label>
-        <textarea
+      <div className="space-y-1.5">
+        <Label>Note</Label>
+        <Textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
           maxLength={1000}
-          style={{ ...fieldStyle, resize: 'vertical' }}
           placeholder="Note interne…"
         />
       </div>
 
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <label style={{ fontSize: 13, fontWeight: 600 }}>Lignes *</label>
-          <button onClick={addRow} style={{ fontSize: 13, padding: '4px 12px', borderRadius: 6, border: '1px solid #2563eb', color: '#2563eb', background: '#fff', cursor: 'pointer' }}>
-            + Ajouter une ligne
-          </button>
+        <div className="mb-2 flex items-center justify-between">
+          <Label>Lignes *</Label>
+          <Button variant="secondary" size="sm" onClick={addRow} type="button">
+            <Plus className="h-3.5 w-3.5" />
+            Ajouter une ligne
+          </Button>
         </div>
 
-        {rows.map((row, idx) => (
-          <div key={idx} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 10, display: 'grid', gap: 8 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-              <select
-                value={row.productId}
-                onChange={(e) => onSelectProduct(idx, e.target.value)}
-                style={fieldStyle}
-              >
-                <option value="">— Produit —</option>
-                {products.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
-              </select>
-              {rows.length > 1 && (
-                <button onClick={() => removeRow(idx)} style={{ border: 'none', background: '#fee2e2', color: '#dc2626', borderRadius: 6, cursor: 'pointer', padding: '0 10px', fontWeight: 700 }}>×</button>
-              )}
+        <div className="flex flex-col gap-2.5">
+          {rows.map((row, idx) => (
+            <div key={idx} className="rounded-card border border-neutral-200 p-3">
+              <div className="mb-2 grid grid-cols-[1fr_auto] gap-2">
+                <NativeSelect value={row.productId} onChange={(e) => onSelectProduct(idx, e.target.value)}>
+                  <option value="">— Produit —</option>
+                  {products.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
+                </NativeSelect>
+                {rows.length > 1 && (
+                  <Button variant="ghost" size="icon" type="button" onClick={() => removeRow(idx)} className="text-danger-600 hover:bg-danger-50">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-4 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[11.5px] text-neutral-500">Quantité *</Label>
+                  <Input value={row.quantity} onChange={(e) => setRow(idx, 'quantity', e.target.value)} placeholder="1" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11.5px] text-neutral-500">Prix unitaire *</Label>
+                  <Input value={row.price} onChange={(e) => setRow(idx, 'price', e.target.value)} placeholder="0" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11.5px] text-neutral-500">Remise (%)</Label>
+                  <Input value={row.discount} onChange={(e) => setRow(idx, 'discount', e.target.value)} placeholder="0" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11.5px] text-neutral-500">Taxe (%)</Label>
+                  <Input value={row.taxAmount} onChange={(e) => setRow(idx, 'taxAmount', e.target.value)} placeholder="0" />
+                </div>
+              </div>
+
+              <p className="tabular mt-2 text-right text-[12.5px] text-neutral-500">
+                Total ligne (indicatif) : <strong className="text-neutral-800">{formatXAF(computeLinePreview(row))}</strong>
+              </p>
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
-              <div>
-                <label style={{ fontSize: 12, color: '#6b7280' }}>Quantité *</label>
-                <input type="text" value={row.quantity} onChange={(e) => setRow(idx, 'quantity', e.target.value)} placeholder="1" style={{ ...fieldStyle, marginTop: 4 }} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: '#6b7280' }}>Prix unitaire *</label>
-                <input type="text" value={row.price} onChange={(e) => setRow(idx, 'price', e.target.value)} placeholder="0" style={{ ...fieldStyle, marginTop: 4 }} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: '#6b7280' }}>Remise (%)</label>
-                <input type="text" value={row.discount} onChange={(e) => setRow(idx, 'discount', e.target.value)} placeholder="0" style={{ ...fieldStyle, marginTop: 4 }} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: '#6b7280' }}>Taxe (%)</label>
-                <input type="text" value={row.taxAmount} onChange={(e) => setRow(idx, 'taxAmount', e.target.value)} placeholder="0" style={{ ...fieldStyle, marginTop: 4 }} />
-              </div>
-            </div>
-
-            <p style={{ margin: 0, textAlign: 'right', fontSize: 13, color: '#374151', fontVariantNumeric: 'tabular-nums' }}>
-              Total ligne (indicatif) : <strong>{formatXAF(computeLinePreview(row))}</strong>
-            </p>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-        <div>
-          <label style={{ fontSize: 12, color: '#6b7280' }}>TVA globale (%)</label>
-          <input type="text" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} style={{ ...fieldStyle, marginTop: 4 }} />
-        </div>
-        <div>
-          <label style={{ fontSize: 12, color: '#6b7280' }}>Remise globale (XAF)</label>
-          <input type="text" value={discount} onChange={(e) => setDiscount(e.target.value)} style={{ ...fieldStyle, marginTop: 4 }} />
-        </div>
-        <div>
-          <label style={{ fontSize: 12, color: '#6b7280' }}>Frais de port (XAF)</label>
-          <input type="text" value={shipping} onChange={(e) => setShipping(e.target.value)} style={{ ...fieldStyle, marginTop: 4 }} />
+          ))}
         </div>
       </div>
 
-      <div style={{ background: '#f9fafb', borderRadius: 8, padding: '12px 16px', textAlign: 'right' }}>
-        <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Total indicatif (recalculé par le serveur)</p>
-        <p style={{ margin: '4px 0 0', fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{formatXAF(grandTotalPreview)}</p>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="space-y-1">
+          <Label className="text-[11.5px] text-neutral-500">TVA globale (%)</Label>
+          <Input value={taxRate} onChange={(e) => setTaxRate(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11.5px] text-neutral-500">Remise globale (XAF)</Label>
+          <Input value={discount} onChange={(e) => setDiscount(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11.5px] text-neutral-500">Frais de port (XAF)</Label>
+          <Input value={shipping} onChange={(e) => setShipping(e.target.value)} />
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, paddingTop: 8 }}>
-        <button
-          onClick={() => onSave(buildPayload())}
-          disabled={!canSubmit || saving}
-          style={{
-            flex: 1, padding: '10px 16px', borderRadius: 6, border: 'none',
-            background: '#2563eb', color: '#fff', cursor: canSubmit ? 'pointer' : 'not-allowed',
-            fontWeight: 600, fontSize: 14, opacity: canSubmit ? 1 : 0.5,
-          }}
-        >
-          {saving ? 'Enregistrement…' : 'Enregistrer'}
-        </button>
+      <div className="rounded-card bg-brand-50 px-4 py-3 text-right">
+        <p className="text-[11.5px] text-brand-700/70">Total indicatif (recalculé par le serveur)</p>
+        <p className="tabular mt-0.5 text-[19px] font-semibold text-brand-800">{formatXAF(grandTotalPreview)}</p>
       </div>
+
+      <Button onClick={() => onSave(buildPayload())} disabled={!canSubmit} loading={saving} size="lg">
+        {!saving && 'Enregistrer'}
+        {saving && 'Enregistrement…'}
+      </Button>
     </div>
   );
 }
@@ -518,101 +376,86 @@ function SaleDetailView({
   sale,
   products,
   onDelete,
-  deleting,
 }: {
   sale: Sale;
   products: ProductRef[];
   onDelete: () => void;
-  deleting: boolean;
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-4">
         <div>
-          <p style={{ margin: '0 0 4px', fontSize: 12, color: '#6b7280' }}>Référence</p>
-          <p style={{ margin: 0, fontWeight: 700, fontFamily: 'monospace' }}>{sale.reference}</p>
+          <p className="mb-1 text-[11.5px] text-neutral-500">Référence</p>
+          <p className="tabular font-semibold text-neutral-900">{sale.reference}</p>
         </div>
         <div>
-          <p style={{ margin: '0 0 4px', fontSize: 12, color: '#6b7280' }}>Statuts</p>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <p className="mb-1 text-[11.5px] text-neutral-500">Statuts</p>
+          <div className="flex gap-1.5">
             <StatusBadge status={sale.status} />
             <PaymentBadge status={sale.paymentStatus} />
           </div>
         </div>
         <div>
-          <p style={{ margin: '0 0 4px', fontSize: 12, color: '#6b7280' }}>Date</p>
-          <p style={{ margin: 0 }}>{formatDate(sale.date)}</p>
+          <p className="mb-1 text-[11.5px] text-neutral-500">Date</p>
+          <p className="text-[13.5px] text-neutral-800">{formatDate(sale.date)}</p>
         </div>
         <div>
-          <p style={{ margin: '0 0 4px', fontSize: 12, color: '#6b7280' }}>Client / Entrepôt</p>
-          <p style={{ margin: 0 }}>{sale.client?.name ?? sale.clientId} — {sale.warehouse?.name ?? sale.warehouseId}</p>
+          <p className="mb-1 text-[11.5px] text-neutral-500">Client / Entrepôt</p>
+          <p className="text-[13.5px] text-neutral-800">{sale.client?.name ?? sale.clientId} — {sale.warehouse?.name ?? sale.warehouseId}</p>
         </div>
       </div>
 
       {sale.notes && (
-        <div style={{ background: '#f9fafb', borderRadius: 8, padding: 12, fontSize: 14, color: '#374151' }}>
-          {sale.notes}
-        </div>
+        <div className="rounded-card bg-neutral-50 px-3.5 py-3 text-[13.5px] text-neutral-700">{sale.notes}</div>
       )}
 
       <div>
-        <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 600 }}>Lignes ({sale.details?.length ?? 0})</p>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-          <thead>
-            <tr style={{ background: '#f9fafb' }}>
-              <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #e5e7eb' }}>Produit</th>
-              <th style={{ textAlign: 'right', padding: '8px 10px', borderBottom: '1px solid #e5e7eb' }}>Qté</th>
-              <th style={{ textAlign: 'right', padding: '8px 10px', borderBottom: '1px solid #e5e7eb' }}>P.U.</th>
-              <th style={{ textAlign: 'right', padding: '8px 10px', borderBottom: '1px solid #e5e7eb' }}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
+        <p className="mb-2 text-[12.5px] font-semibold text-neutral-700">Lignes ({sale.details?.length ?? 0})</p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Produit</TableHead>
+              <TableHead className="text-right">Qté</TableHead>
+              <TableHead className="text-right">P.U.</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {(sale.details ?? []).map((d) => {
               const prod = products.find((p) => p.id === d.productId);
               return (
-                <tr key={d.id}>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6' }}>
-                    {prod ? `${prod.code} — ${prod.name}` : d.productId}
-                  </td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.quantity}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatXAF(d.price)}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatXAF(d.total)}</td>
-                </tr>
+                <TableRow key={d.id}>
+                  <TableCell>{prod ? `${prod.code} — ${prod.name}` : d.productId}</TableCell>
+                  <TableCell className="tabular text-right">{d.quantity}</TableCell>
+                  <TableCell className="tabular text-right">{formatXAF(d.price)}</TableCell>
+                  <TableCell className="tabular text-right">{formatXAF(d.total)}</TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
-      <div style={{ background: '#f9fafb', borderRadius: 8, padding: '12px 16px', display: 'grid', gap: 4 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#374151' }}>
-          <span>TVA ({sale.taxRate ?? '0'} %)</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatXAF(sale.taxAmount ?? '0')}</span>
+      <div className="grid gap-1.5 rounded-card bg-neutral-50 px-4 py-3">
+        <div className="flex justify-between text-[13px] text-neutral-600">
+          <span>TVA ({sale.taxRate ?? '0'} %)</span><span className="tabular">{formatXAF(sale.taxAmount ?? '0')}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#374151' }}>
-          <span>Remise</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>− {formatXAF(sale.discount ?? '0')}</span>
+        <div className="flex justify-between text-[13px] text-neutral-600">
+          <span>Remise</span><span className="tabular">− {formatXAF(sale.discount ?? '0')}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#374151' }}>
-          <span>Frais de port</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatXAF(sale.shipping ?? '0')}</span>
+        <div className="flex justify-between text-[13px] text-neutral-600">
+          <span>Frais de port</span><span className="tabular">{formatXAF(sale.shipping ?? '0')}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 700, paddingTop: 6, borderTop: '1px solid #e5e7eb' }}>
-          <span>Total</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatXAF(sale.grandTotal)}</span>
+        <div className="mt-1 flex justify-between border-t border-neutral-200 pt-2 text-[16px] font-semibold text-neutral-900">
+          <span>Total</span><span className="tabular">{formatXAF(sale.grandTotal)}</span>
         </div>
       </div>
 
       {sale.status === 'PENDING' && (
-        <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
-          <button
-            onClick={onDelete}
-            disabled={deleting}
-            style={{
-              padding: '10px 16px', borderRadius: 6, border: '1px solid #dc2626',
-              background: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 600, fontSize: 14,
-              opacity: deleting ? 0.7 : 1,
-            }}
-          >
-            {deleting ? 'Suppression…' : 'Supprimer'}
-          </button>
-        </div>
+        <Button variant="destructive" onClick={onDelete}>
+          <Trash2 className="h-4 w-4" />
+          Supprimer
+        </Button>
       )}
     </div>
   );
@@ -622,7 +465,6 @@ function SaleDetailView({
 
 export default function SalesPage() {
   const qc = useQueryClient();
-  const { toasts, add: addToast, dismiss } = useToast();
 
   const [page, setPage] = useState(1);
   const limit = 20;
@@ -651,9 +493,9 @@ export default function SalesPage() {
     try {
       const created = await createMutation.mutateAsync(payload);
       setSheetOpen(false);
-      addToast(`Vente créée. Référence : ${created.reference}`);
+      toast.success(`Vente créée. Référence : ${created.reference}`);
     } catch {
-      addToast("Erreur lors de l'enregistrement de la vente.", 'error');
+      toast.error("Erreur lors de l'enregistrement de la vente.");
     }
   }
 
@@ -662,42 +504,10 @@ export default function SalesPage() {
       await deleteMutation.mutateAsync(id);
       setDeleteTarget(null);
       if (detailId === id) setDetailId(null);
-      addToast('Vente supprimée.');
+      toast.success('Vente supprimée.');
     } catch {
-      addToast('Erreur lors de la suppression.', 'error');
+      toast.error('Erreur lors de la suppression.');
     }
-  }
-
-  // ── État chargement ───────────────────────────────────────────────────────
-  if (isLoading) {
-    return (
-      <div style={{ padding: 32 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <Skeleton height={32} width={220} />
-          <Skeleton height={36} width={160} />
-        </div>
-        {[1, 2, 3, 4, 5].map((i) => (
-          <div key={i} style={{ marginBottom: 12 }}><Skeleton height={48} /></div>
-        ))}
-      </div>
-    );
-  }
-
-  // ── État erreur ───────────────────────────────────────────────────────────
-  if (isError) {
-    return (
-      <div style={{ padding: 32, textAlign: 'center' }}>
-        <p style={{ color: '#dc2626', fontSize: 15, marginBottom: 12 }}>
-          Impossible de charger les ventes.
-        </p>
-        <button
-          onClick={() => void qc.invalidateQueries({ queryKey: ['sales'] })}
-          style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer' }}
-        >
-          Réessayer
-        </button>
-      </div>
-    );
   }
 
   const rows = data?.data ?? [];
@@ -705,168 +515,208 @@ export default function SalesPage() {
   const totalPages = Math.ceil(total / limit) || 1;
 
   return (
-    <div style={{ padding: 32, maxWidth: 1200, margin: '0 auto' }}>
-      <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
-
-      {/* ── En-tête ─────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Ventes</h1>
-        <button
-          onClick={() => setSheetOpen(true)}
-          style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}
-        >
-          + Nouvelle vente
-        </button>
-      </div>
+    <div className="mx-auto max-w-6xl p-8">
+      <PageHeader
+        title="Ventes"
+        description="Factures classiques hors point de vente."
+        action={
+          <Button onClick={() => setSheetOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Nouvelle vente
+          </Button>
+        }
+      />
 
       {/* ── Filtres ──────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-        <select
-          value={filterClient}
-          onChange={(e) => { setFilterClient(e.target.value); setPage(1); }}
-          style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13 }}
-        >
-          <option value="">Tous les clients</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select
-          value={filterWarehouse}
-          onChange={(e) => { setFilterWarehouse(e.target.value); setPage(1); }}
-          style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13 }}
-        >
-          <option value="">Tous les entrepôts</option>
-          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-        </select>
-        <select
-          value={filterStatus}
-          onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
-          style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13 }}
-        >
-          <option value="">Tous les statuts</option>
-          <option value="PENDING">En attente</option>
-          <option value="COMPLETED">Terminée</option>
-          <option value="CANCELLED">Annulée</option>
-        </select>
-      </div>
-
-      {/* ── État vide ────────────────────────────────────────────────────── */}
-      {rows.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '64px 0', color: '#6b7280' }}>
-          <p style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Aucune vente</p>
-          <p style={{ fontSize: 14, marginBottom: 20 }}>Créez votre première vente pour un client.</p>
-          <button
-            onClick={() => setSheetOpen(true)}
-            style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+      {!isLoading && !isError && (
+        <div className="mb-4 flex gap-2.5">
+          <NativeSelect
+            className="w-auto min-w-[10rem]"
+            value={filterClient}
+            onChange={(e) => { setFilterClient(e.target.value); setPage(1); }}
           >
-            + Nouvelle vente
-          </button>
+            <option value="">Tous les clients</option>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </NativeSelect>
+          <NativeSelect
+            className="w-auto min-w-[10rem]"
+            value={filterWarehouse}
+            onChange={(e) => { setFilterWarehouse(e.target.value); setPage(1); }}
+          >
+            <option value="">Tous les entrepôts</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </NativeSelect>
+          <NativeSelect
+            className="w-auto min-w-[9rem]"
+            value={filterStatus}
+            onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
+          >
+            <option value="">Tous les statuts</option>
+            <option value="PENDING">En attente</option>
+            <option value="COMPLETED">Terminée</option>
+            <option value="CANCELLED">Annulée</option>
+          </NativeSelect>
         </div>
       )}
 
+      {/* ── État chargement ───────────────────────────────────────────────── */}
+      {isLoading && <TableSkeleton columns={7} />}
+
+      {/* ── État erreur ───────────────────────────────────────────────────── */}
+      {isError && (
+        <ErrorState message="Impossible de charger les ventes." onRetry={() => void qc.invalidateQueries({ queryKey: ['sales'] })} />
+      )}
+
+      {/* ── État vide ────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length === 0 && (
+        <EmptyState
+          icon={ReceiptText}
+          title="Aucune vente"
+          description="Créez votre première vente pour un client."
+          action={
+            <Button onClick={() => setSheetOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Nouvelle vente
+            </Button>
+          }
+        />
+      )}
+
       {/* ── Liste ────────────────────────────────────────────────────────── */}
-      {rows.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-          <thead>
-            <tr style={{ background: '#f9fafb' }}>
-              {['Référence', 'Date', 'Client', 'Entrepôt', 'Lignes', 'Total', 'Paiement', 'Statut', 'Actions'].map((h) => (
-                <th key={h} style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#374151' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
+      {!isLoading && !isError && rows.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Référence</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead>Client</TableHead>
+              <TableHead>Entrepôt</TableHead>
+              <TableHead className="text-center">Lignes</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+              <TableHead>Paiement</TableHead>
+              <TableHead>Statut</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((s) => {
               const clientName    = clients.find((c) => c.id === s.clientId)?.name ?? '—';
               const warehouseName = warehouses.find((w) => w.id === s.warehouseId)?.name ?? '—';
               return (
-                <tr key={s.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                  <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: 600 }}>{s.reference}</td>
-                  <td style={{ padding: '10px 12px' }}>{formatDate(s.date)}</td>
-                  <td style={{ padding: '10px 12px' }}>{clientName}</td>
-                  <td style={{ padding: '10px 12px' }}>{warehouseName}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'center' }}>{s.details?.length ?? '—'}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatXAF(s.grandTotal)}</td>
-                  <td style={{ padding: '10px 12px' }}><PaymentBadge status={s.paymentStatus} /></td>
-                  <td style={{ padding: '10px 12px' }}><StatusBadge status={s.status} /></td>
-                  <td style={{ padding: '10px 12px', display: 'flex', gap: 6 }}>
-                    <button
-                      onClick={() => setDetailId(s.id)}
-                      style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 13 }}
-                    >
-                      Voir
-                    </button>
-                    {s.status === 'PENDING' && (
-                      <button
-                        onClick={() => setDeleteTarget({ id: s.id, reference: s.reference })}
-                        style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff', color: '#dc2626', cursor: 'pointer', fontSize: 13 }}
+                <TableRow key={s.id} className="cursor-pointer" onClick={() => setDetailId(s.id)}>
+                  <TableCell className="tabular font-semibold text-neutral-900">{s.reference}</TableCell>
+                  <TableCell>{formatDate(s.date)}</TableCell>
+                  <TableCell>{clientName}</TableCell>
+                  <TableCell>{warehouseName}</TableCell>
+                  <TableCell className="tabular text-center">{s.details?.length ?? '—'}</TableCell>
+                  <TableCell className="tabular text-right">{formatXAF(s.grandTotal)}</TableCell>
+                  <TableCell><PaymentBadge status={s.paymentStatus} /></TableCell>
+                  <TableCell><StatusBadge status={s.status} /></TableCell>
+                  <TableCell className="text-right">
+                    <div className={cn('flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100')}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => { e.stopPropagation(); setDetailId(s.id); }}
+                        aria-label="Voir"
                       >
-                        Supprimer
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      {s.status === 'PENDING' && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-danger-600 hover:bg-danger-50"
+                          onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: s.id, reference: s.reference }); }}
+                          aria-label="Supprimer"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
 
       {/* ── Pagination ───────────────────────────────────────────────────── */}
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 20 }}>
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
-            ←
-          </button>
-          <span style={{ padding: '6px 10px', fontSize: 13 }}>{page} / {totalPages}</span>
-          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
-            →
-          </button>
+      {!isLoading && !isError && totalPages > 1 && (
+        <div className="mt-5 flex items-center justify-center gap-3">
+          <Button variant="secondary" size="icon" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <span className="text-[13px] text-neutral-500">{page} / {totalPages}</span>
+          <Button variant="secondary" size="icon" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
       )}
 
       {/* ── Sheet création ───────────────────────────────────────────────── */}
-      <Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Nouvelle vente">
-        <SaleForm
-          clients={clients}
-          warehouses={warehouses}
-          products={products}
-          onSave={(payload) => void handleSave(payload)}
-          saving={createMutation.isPending}
-        />
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Nouvelle vente</SheetTitle>
+            <SheetDescription>Client, entrepôt et lignes — le total est recalculé côté serveur.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <SaleForm
+              clients={clients}
+              warehouses={warehouses}
+              products={products}
+              onSave={(payload) => void handleSave(payload)}
+              saving={createMutation.isPending}
+            />
+          </div>
+        </SheetContent>
       </Sheet>
 
       {/* ── Sheet détail ─────────────────────────────────────────────────── */}
-      <Sheet
-        open={detailId !== null}
-        onClose={() => setDetailId(null)}
-        title={detail ? `Vente ${detail.reference}` : 'Chargement…'}
-      >
-        {detailLoading && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[1, 2, 3].map((i) => <Skeleton key={i} height={40} />)}
+      <Sheet open={detailId !== null} onOpenChange={(open) => !open && setDetailId(null)}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{detail ? `Vente ${detail.reference}` : 'Chargement…'}</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            {detailLoading && (
+              <div className="flex flex-col gap-3">
+                {[1, 2, 3].map((i) => <div key={i} className="h-10 animate-pulse rounded-field bg-neutral-100" />)}
+              </div>
+            )}
+            {detail && (
+              <SaleDetailView
+                sale={detail}
+                products={products}
+                onDelete={() => setDeleteTarget({ id: detail.id, reference: detail.reference })}
+              />
+            )}
           </div>
-        )}
-        {detail && (
-          <SaleDetailView
-            sale={detail}
-            products={products}
-            onDelete={() => setDeleteTarget({ id: detail.id, reference: detail.reference })}
-            deleting={deleteMutation.isPending}
-          />
-        )}
+        </SheetContent>
       </Sheet>
 
       {/* ── AlertDialog suppression ───────────────────────────────────────── */}
-      <AlertDialog
-        open={deleteTarget !== null}
-        title={`Supprimer la vente ${deleteTarget?.reference ?? ''} ?`}
-        description="Cette action est irréversible. La vente sera définitivement supprimée."
-        confirmLabel="Supprimer"
-        onConfirm={() => deleteTarget && void handleDelete(deleteTarget.id)}
-        onCancel={() => setDeleteTarget(null)}
-        loading={deleteMutation.isPending}
-      />
-
-      <ToastList toasts={toasts} onDismiss={dismiss} />
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer la vente {deleteTarget?.reference ?? ''} ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible. La vente sera définitivement supprimée.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && void handleDelete(deleteTarget.id)}
+            >
+              {deleteMutation.isPending ? 'Suppression…' : 'Supprimer'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

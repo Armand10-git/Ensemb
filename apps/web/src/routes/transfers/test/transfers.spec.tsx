@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TransfersPage from '../index';
+import { Toaster } from '../../../components/ui/sonner';
 
 // ─── Mock Socket.io (connexion réseau non disponible en test) ─────────────────
 
@@ -76,6 +77,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <TransfersPage />
+      <Toaster />
     </QueryClientProvider>,
   );
 }
@@ -99,8 +101,7 @@ describe('TransfersPage', () => {
   it('affiche des skeletons pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => undefined));
     renderPage();
-    const skeletons = document.querySelectorAll('div[style*="shimmer"]');
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   // ── État vide ─────────────────────────────────────────────────────────────
@@ -126,13 +127,13 @@ describe('TransfersPage', () => {
 
   // ── Formulaire de création ────────────────────────────────────────────────
 
-  it('ouvre le Sheet de création en cliquant sur "+ Nouveau transfert"', async () => {
+  it('ouvre le Sheet de création en cliquant sur "Nouveau transfert"', async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouveau transfert'));
+    await waitFor(() => screen.getByText('Nouveau transfert'));
 
-    await userEvent.click(screen.getByText('+ Nouveau transfert'));
+    await userEvent.click(screen.getAllByText('Nouveau transfert')[0]!);
 
-    await waitFor(() => expect(screen.getByText('Nouveau transfert')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Nouveau transfert').length).toBeGreaterThan(1));
     expect(screen.getByText('Enregistrer en brouillon')).toBeInTheDocument();
     expect(screen.getByText('Valider le transfert')).toBeInTheDocument();
   });
@@ -141,9 +142,9 @@ describe('TransfersPage', () => {
 
   it("le sélecteur destination exclut l'entrepôt source sélectionné", async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouveau transfert'));
+    await waitFor(() => screen.getByText('Nouveau transfert'));
 
-    await userEvent.click(screen.getByText('+ Nouveau transfert'));
+    await userEvent.click(screen.getAllByText('Nouveau transfert')[0]!);
 
     await waitFor(() => screen.getByTestId('from-warehouse-select'));
 
@@ -166,8 +167,8 @@ describe('TransfersPage', () => {
     mockApi.patch.mockResolvedValue(makeTransfer('VALIDATED'));
 
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouveau transfert'));
-    await userEvent.click(screen.getByText('+ Nouveau transfert'));
+    await waitFor(() => screen.getByText('Nouveau transfert'));
+    await userEvent.click(screen.getAllByText('Nouveau transfert')[0]!);
 
     await waitFor(() => screen.getByText('Valider le transfert'));
 

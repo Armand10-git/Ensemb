@@ -1,6 +1,31 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Pencil, Trash2, Tag } from 'lucide-react';
 import { api } from '../../lib/api';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Textarea } from '../../components/ui/textarea';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from '../../components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui/alert-dialog';
+import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -60,52 +85,7 @@ function useDeleteBrand() {
   });
 }
 
-// ─── Composants ──────────────────────────────────────────────────────────────
-
-function SkeletonRow() {
-  return (
-    <tr className="animate-pulse" aria-busy="true">
-      {[1, 2, 3, 4].map((i) => (
-        <td key={i} className="px-4 py-3">
-          <div className="h-4 bg-gray-200 rounded w-full" />
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div
-      role="alert"
-      className="flex items-center justify-between rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800"
-    >
-      <span>{message}</span>
-      <button
-        onClick={onRetry}
-        className="ml-4 rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700"
-      >
-        Réessayer
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-      <p className="text-lg font-medium">Aucune marque</p>
-      <p className="mt-1 text-sm">Créez votre première marque pour enrichir votre catalogue.</p>
-      <button
-        data-testid="empty-add-brand"
-        onClick={onAdd}
-        className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-      >
-        Nouvelle marque
-      </button>
-    </div>
-  );
-}
+// ─── Avatar marque ───────────────────────────────────────────────────────────
 
 function BrandAvatar({ name, image }: { name: string; image: string | null }) {
   const [imgError, setImgError] = useState(false);
@@ -123,186 +103,81 @@ function BrandAvatar({ name, image }: { name: string; image: string | null }) {
   return (
     <div
       aria-label={`Initiale ${name}`}
-      className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700"
+      className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-50 text-[12px] font-semibold text-brand-700"
     >
       {name.charAt(0).toUpperCase()}
     </div>
   );
 }
 
-function BrandDialog({
-  open,
-  onClose,
+// ─── Formulaire création / édition ───────────────────────────────────────────
+
+function BrandForm({
   initial,
-  onSubmit,
-  isPending,
-  error,
+  onSave,
+  saving,
 }: {
-  open: boolean;
-  onClose: () => void;
   initial?: Partial<BrandFormData>;
-  onSubmit: (data: Partial<BrandFormData>) => void;
-  isPending: boolean;
-  error: string | null;
+  onSave: (data: Partial<BrandFormData>) => void;
+  saving: boolean;
 }) {
-  const [form, setForm] = useState<BrandFormData>({
-    name: initial?.name ?? '',
-    description: initial?.description ?? '',
-    image: initial?.image ?? '',
-  });
-
-  React.useEffect(() => {
-    if (open) {
-      setForm({
-        name: initial?.name ?? '',
-        description: initial?.description ?? '',
-        image: initial?.image ?? '',
-      });
-    }
-  }, [open, initial?.name, initial?.description, initial?.image]);
-
-  if (!open) return null;
+  const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [image, setImage] = useState(initial?.image ?? '');
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const payload: Partial<BrandFormData> = { name: form.name };
-    if (form.description.trim()) payload.description = form.description;
-    if (form.image.trim()) payload.image = form.image;
-    onSubmit(payload);
+    const payload: Partial<BrandFormData> = { name };
+    if (description.trim()) payload.description = description;
+    if (image.trim()) payload.image = image;
+    onSave(payload);
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={initial?.name ? 'Modifier la marque' : 'Nouvelle marque'}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">
-          {initial?.name ? 'Modifier la marque' : 'Nouvelle marque'}
-        </h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="brand-name">
-              Nom <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="brand-name"
-              type="text"
-              required
-              maxLength={100}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="brand-description">
-              Description
-            </label>
-            <textarea
-              id="brand-description"
-              maxLength={500}
-              rows={3}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="brand-image">
-              URL du logo
-              <span
-                title="L'upload de fichier sera disponible prochainement"
-                className="ml-1 cursor-help text-gray-400"
-              >
-                ⓘ
-              </span>
-            </label>
-            <input
-              id="brand-image"
-              type="url"
-              maxLength={2048}
-              placeholder="https://exemple.com/logo.png"
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.image}
-              onChange={(e) => setForm((f) => ({ ...f, image: e.target.value }))}
-            />
-            <p className="mt-1 text-xs text-gray-400">L'upload de fichier sera disponible prochainement</p>
-          </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={isPending}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isPending ? 'Enregistrement…' : 'Enregistrer'}
-            </button>
-          </div>
-        </form>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+      <div className="space-y-1.5">
+        <Label htmlFor="brand-name">
+          Nom <span className="text-danger-600">*</span>
+        </Label>
+        <Input
+          id="brand-name"
+          required
+          maxLength={100}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
       </div>
-    </div>
-  );
-}
 
-function DeleteDialog({
-  open,
-  brandName,
-  onCancel,
-  onConfirm,
-  isPending,
-  error,
-}: {
-  open: boolean;
-  brandName: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Confirmer la suppression"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">Supprimer la marque</h2>
-        <p className="mb-4 text-sm text-gray-600">
-          Voulez-vous vraiment supprimer la marque{' '}
-          <span className="font-semibold text-gray-900">"{brandName}"</span> ?
-          Cette action ne peut pas être annulée.
-        </p>
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Annuler
-          </button>
-          <button
-            data-testid="confirm-delete"
-            onClick={onConfirm}
-            disabled={isPending}
-            className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            {isPending ? 'Suppression…' : 'Supprimer'}
-          </button>
-        </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="brand-description">Description</Label>
+        <Textarea
+          id="brand-description"
+          maxLength={500}
+          rows={3}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
       </div>
-    </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="brand-image">URL du logo</Label>
+        <Input
+          id="brand-image"
+          type="url"
+          maxLength={2048}
+          placeholder="https://exemple.com/logo.png"
+          value={image}
+          onChange={(e) => setImage(e.target.value)}
+        />
+        <p className="text-[12px] text-neutral-400">L'upload de fichier sera disponible prochainement</p>
+      </div>
+
+      <SheetFooter className="border-0 px-0 pb-0 pt-2">
+        <Button type="submit" disabled={saving} loading={saving}>
+          {!saving && 'Enregistrer'}
+        </Button>
+      </SheetFooter>
+    </form>
   );
 }
 
@@ -356,141 +231,165 @@ export function BrandsPage() {
     });
   }
 
-  const activeError = editTarget ? updateBrand.error : createBrand.error;
   const isPendingForm = editTarget ? updateBrand.isPending : createBrand.isPending;
   const totalPages = data ? Math.ceil(data.total / limit) : 1;
+  const rows = data?.data ?? [];
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Marques</h1>
-        <button
-          data-testid="add-brand"
-          onClick={openCreate}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-        >
-          Nouvelle marque
-        </button>
-      </div>
+    <div className="mx-auto max-w-4xl p-8">
+      <PageHeader
+        title="Marques"
+        description="Marques de produits utilisées dans le catalogue."
+        action={
+          <Button data-testid="add-brand" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nouvelle marque
+          </Button>
+        }
+      />
 
-      {/* État erreur */}
+      {/* ── État chargement ───────────────────────────────────────────────── */}
+      {isLoading && <TableSkeleton columns={4} />}
+
+      {/* ── État erreur ───────────────────────────────────────────────────── */}
       {isError && (
-        <ErrorBanner
-          message={(error as Error).message ?? 'Impossible de charger les marques.'}
+        <ErrorState
+          message={(error as Error).message || 'Impossible de charger les marques.'}
           onRetry={() => void refetch()}
         />
       )}
 
-      {/* Tableau */}
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              {['Logo', 'Nom', 'Description', 'Actions'].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500"
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {/* État chargement */}
-            {isLoading && [1, 2, 3].map((i) => <SkeletonRow key={i} />)}
+      {/* ── État vide ────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length === 0 && (
+        <EmptyState
+          icon={Tag}
+          title="Aucune marque"
+          description="Créez votre première marque pour enrichir votre catalogue."
+          action={
+            <Button data-testid="empty-add-brand" onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              Nouvelle marque
+            </Button>
+          }
+        />
+      )}
 
-            {/* État succès */}
-            {!isLoading && !isError && data?.data.map((brand) => (
-              <tr key={brand.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3">
+      {/* ── Liste ────────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Logo</TableHead>
+              <TableHead>Nom</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((brand) => (
+              <TableRow key={brand.id}>
+                <TableCell>
                   <BrandAvatar name={brand.name} image={brand.image} />
-                </td>
-                <td className="px-4 py-3 font-medium text-gray-900">{brand.name}</td>
-                <td className="px-4 py-3 max-w-xs text-gray-500 truncate">
+                </TableCell>
+                <TableCell className="font-semibold text-neutral-900">{brand.name}</TableCell>
+                <TableCell className="max-w-xs truncate text-neutral-500">
                   {brand.description ?? '—'}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       aria-label={`Modifier ${brand.name}`}
                       onClick={() => openEdit(brand)}
-                      className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
                     >
-                      Modifier
-                    </button>
-                    <button
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-danger-600 hover:bg-danger-50"
                       aria-label={`Supprimer ${brand.name}`}
                       onClick={() => setDeleteTarget(brand)}
-                      className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                     >
-                      Supprimer
-                    </button>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
+      )}
 
-        {/* État vide */}
-        {!isLoading && !isError && (!data?.data || data.data.length === 0) && (
-          <EmptyState onAdd={openCreate} />
-        )}
-      </div>
-
-      {/* État partiel — pagination */}
+      {/* ── État partiel — pagination ────────────────────────────────────── */}
       {!isLoading && !isError && data && data.total > limit && (
-        <div className="flex items-center justify-between text-sm text-gray-600">
+        <div className="mt-4 flex items-center justify-between text-[13px] text-neutral-500">
           <span>
             {(page - 1) * limit + 1}–{Math.min(page * limit, data.total)} sur {data.total} marques
           </span>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Précédent
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Suivant
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Modal CRUD */}
-      <BrandDialog
-        open={dialogOpen}
-        onClose={closeDialog}
-        initial={
-          editTarget
-            ? {
-                name: editTarget.name,
-                description: editTarget.description ?? '',
-                image: editTarget.image ?? '',
+      {/* ── Sheet création / édition ────────────────────────────────────── */}
+      <Sheet open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{editTarget ? 'Modifier la marque' : 'Nouvelle marque'}</SheetTitle>
+            <SheetDescription>Nom, description et logo de la marque.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <BrandForm
+              key={editTarget?.id ?? 'new'}
+              initial={
+                editTarget
+                  ? { name: editTarget.name, description: editTarget.description ?? '', image: editTarget.image ?? '' }
+                  : undefined
               }
-            : undefined
-        }
-        onSubmit={handleSubmit}
-        isPending={isPendingForm}
-        error={activeError ? (activeError as Error).message : null}
-      />
+              onSave={handleSubmit}
+              saving={isPendingForm}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
-      {/* AlertDialog suppression */}
-      <DeleteDialog
-        open={!!deleteTarget}
-        brandName={deleteTarget?.name ?? ''}
-        onCancel={() => { setDeleteTarget(null); deleteBrand.reset(); }}
-        onConfirm={handleDelete}
-        isPending={deleteBrand.isPending}
-        error={deleteBrand.error ? (deleteBrand.error as Error).message : null}
-      />
+      {/* ── AlertDialog suppression ─────────────────────────────────────── */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer la marque "{deleteTarget?.name ?? ''}" ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible. La marque sera définitivement supprimée.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setDeleteTarget(null); deleteBrand.reset(); }}>
+              Annuler
+            </AlertDialogCancel>
+            <AlertDialogAction disabled={deleteBrand.isPending} onClick={handleDelete}>
+              {deleteBrand.isPending ? 'Suppression…' : 'Supprimer'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

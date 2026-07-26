@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AdjustmentsPage from '../index';
+import { Toaster } from '../../../components/ui/sonner';
 
 // ─── Mock Socket.io (connexion réseau non disponible en test) ─────────────────
 
@@ -68,6 +69,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <AdjustmentsPage />
+      <Toaster />
     </QueryClientProvider>,
   );
 }
@@ -91,8 +93,7 @@ describe('AdjustmentsPage', () => {
   it('affiche des skeletons pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => undefined));
     renderPage();
-    const skeletons = document.querySelectorAll('div[style*="shimmer"]');
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   // ── État vide ─────────────────────────────────────────────────────────────
@@ -133,19 +134,19 @@ describe('AdjustmentsPage', () => {
 
   it('ouvre le Sheet de création en cliquant sur "Nouvel ajustement"', async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouvel ajustement'));
+    await waitFor(() => screen.getByText('Nouvel ajustement'));
 
-    await userEvent.click(screen.getByText('+ Nouvel ajustement'));
+    await userEvent.click(screen.getAllByText('Nouvel ajustement')[0]!);
 
-    await waitFor(() => expect(screen.getByText('Nouvel ajustement')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Nouvel ajustement').length).toBeGreaterThan(1));
     expect(screen.getByText('Enregistrer en brouillon')).toBeInTheDocument();
     expect(screen.getByText('Valider le stock')).toBeInTheDocument();
   });
 
   it("le bouton 'Valider le stock' est désactivé si la liste de lignes est vide ou incomplète", async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouvel ajustement'));
-    await userEvent.click(screen.getByText('+ Nouvel ajustement'));
+    await waitFor(() => screen.getByText('Nouvel ajustement'));
+    await userEvent.click(screen.getAllByText('Nouvel ajustement')[0]!);
 
     await waitFor(() => screen.getByText('Valider le stock'));
 
@@ -154,17 +155,17 @@ describe('AdjustmentsPage', () => {
     expect(validateBtn).toBeDisabled();
   });
 
-  it('ajoute une ligne supplémentaire via "+ Ajouter une ligne"', async () => {
+  it('ajoute une ligne supplémentaire via "Ajouter une ligne"', async () => {
     renderPage();
-    await waitFor(() => screen.getByText('+ Nouvel ajustement'));
-    await userEvent.click(screen.getByText('+ Nouvel ajustement'));
+    await waitFor(() => screen.getByText('Nouvel ajustement'));
+    await userEvent.click(screen.getAllByText('Nouvel ajustement')[0]!);
 
-    await waitFor(() => screen.getByText('+ Ajouter une ligne'));
+    await waitFor(() => screen.getByText('Ajouter une ligne'));
 
     const productSelects = () => document.querySelectorAll('select[value]');
     const before = productSelects().length;
 
-    await userEvent.click(screen.getByText('+ Ajouter une ligne'));
+    await userEvent.click(screen.getByText('Ajouter une ligne'));
 
     await waitFor(() => {
       // Il y a maintenant un nombre supérieur d'éléments de formulaire

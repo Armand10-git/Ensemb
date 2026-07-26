@@ -1,6 +1,33 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Pencil, Trash2, Ruler } from 'lucide-react';
 import { api } from '../../lib/api';
+import { cn } from '../../lib/utils';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Label } from '../../components/ui/label';
+import { Badge } from '../../components/ui/badge';
+import { NativeSelect } from '../../components/ui/native-select';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../../components/ui/table';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from '../../components/ui/sheet';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../../components/ui/alert-dialog';
+import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -100,69 +127,6 @@ function buildPayload(form: UnitFormData): Record<string, unknown> {
   return base;
 }
 
-// ─── Composants ──────────────────────────────────────────────────────────────
-
-function SkeletonRow() {
-  return (
-    <tr className="animate-pulse" aria-busy="true">
-      {[1, 2, 3, 4].map((i) => (
-        <td key={i} className="px-4 py-3">
-          <div className="h-4 bg-gray-200 rounded w-full" />
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div
-      role="alert"
-      className="flex items-center justify-between rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800"
-    >
-      <span>{message}</span>
-      <button
-        onClick={onRetry}
-        className="ml-4 rounded bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700"
-      >
-        Réessayer
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-      <p className="text-lg font-medium">Aucune unité</p>
-      <p className="mt-1 text-sm">Créez votre première unité pour gérer les conditionnements.</p>
-      <button
-        data-testid="empty-add-unit"
-        onClick={onAdd}
-        className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-      >
-        Nouvelle unité
-      </button>
-    </div>
-  );
-}
-
-function BaseUnitBadge({ unit }: { unit: Unit }) {
-  if (!unit.baseUnit) return null;
-  const val = parseFloat(unit.operatorValue);
-  const label =
-    unit.operator === '*'
-      ? `${val} × ${unit.baseUnit.name}`
-      : `÷ ${val} ${unit.baseUnit.name}`;
-  return (
-    <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
-      {unit.name} = {label}
-    </span>
-  );
-}
-
-// ─── Dialog création / édition ───────────────────────────────────────────────
-
 const DEFAULT_FORM: UnitFormData = {
   name: '',
   shortName: '',
@@ -172,260 +136,170 @@ const DEFAULT_FORM: UnitFormData = {
   operatorValue: '1',
 };
 
-function UnitDialog({
-  open,
-  onClose,
+// ─── Badge de hiérarchie ──────────────────────────────────────────────────────
+
+function BaseUnitBadge({ unit }: { unit: Unit }) {
+  if (!unit.baseUnit) return null;
+  const val = parseFloat(unit.operatorValue);
+  const label = unit.operator === '*' ? `${val} × ${unit.baseUnit.name}` : `÷ ${val} ${unit.baseUnit.name}`;
+  return <Badge variant="info">{unit.name} = {label}</Badge>;
+}
+
+// ─── Formulaire création / édition ───────────────────────────────────────────
+
+function UnitForm({
   initial,
-  onSubmit,
-  isPending,
-  error,
   baseUnits,
+  onSave,
+  saving,
 }: {
-  open: boolean;
-  onClose: () => void;
   initial?: Partial<UnitFormData>;
-  onSubmit: (data: Record<string, unknown>) => void;
-  isPending: boolean;
-  error: string | null;
   baseUnits: Unit[];
+  onSave: (data: Record<string, unknown>) => void;
+  saving: boolean;
 }) {
   const [form, setForm] = useState<UnitFormData>({ ...DEFAULT_FORM, ...initial });
-
-  React.useEffect(() => {
-    if (open) {
-      setForm({ ...DEFAULT_FORM, ...initial });
-    }
-  }, [open]);
-
-  if (!open) return null;
 
   const preview = buildPreview(form, baseUnits);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onSubmit(buildPayload(form));
+    onSave(buildPayload(form));
   }
 
-  const isEdit = Boolean(initial?.name);
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={isEdit ? "Modifier l'unité" : 'Nouvelle unité'}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-lg font-semibold text-gray-900">
-          {isEdit ? "Modifier l'unité" : 'Nouvelle unité'}
-        </h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="unit-name">
-              Nom <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="unit-name"
-              type="text"
-              required
-              maxLength={100}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700" htmlFor="unit-short-name">
-              Nom court <span className="text-red-500">*</span>
-            </label>
-            <input
-              id="unit-short-name"
-              type="text"
-              required
-              maxLength={20}
-              placeholder="pcs, ctn, L…"
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.shortName}
-              onChange={(e) => setForm((f) => ({ ...f, shortName: e.target.value }))}
-            />
-          </div>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+      <div className="space-y-1.5">
+        <Label htmlFor="unit-name">
+          Nom <span className="text-danger-600">*</span>
+        </Label>
+        <Input
+          id="unit-name"
+          required
+          maxLength={100}
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+        />
+      </div>
 
-          {/* Switch Unité dérivée */}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={form.isDerived}
-              data-testid="switch-derived"
-              onClick={() => setForm((f) => ({ ...f, isDerived: !f.isDerived }))}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                form.isDerived ? 'bg-blue-600' : 'bg-gray-300'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  form.isDerived ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-            <span className="text-sm font-medium text-gray-700">Unité dérivée</span>
-          </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="unit-short-name">
+          Nom court <span className="text-danger-600">*</span>
+        </Label>
+        <Input
+          id="unit-short-name"
+          required
+          maxLength={20}
+          placeholder="pcs, ctn, L…"
+          value={form.shortName}
+          onChange={(e) => setForm((f) => ({ ...f, shortName: e.target.value }))}
+        />
+      </div>
 
-          {/* Champs spécifiques aux unités dérivées */}
-          {form.isDerived && (
-            <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700" htmlFor="unit-base">
-                  Unité de base <span className="text-red-500">*</span>
-                </label>
-                <select
-                  id="unit-base"
-                  required={form.isDerived}
-                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={form.baseUnitId}
-                  onChange={(e) => setForm((f) => ({ ...f, baseUnitId: e.target.value }))}
-                >
-                  <option value="">Sélectionner une unité de base…</option>
-                  {baseUnits.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} ({u.shortName})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-gray-700" htmlFor="unit-operator-value">
-                    Facteur
-                  </label>
-                  <input
-                    id="unit-operator-value"
-                    type="number"
-                    min="0.000001"
-                    step="any"
-                    required={form.isDerived}
-                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={form.operatorValue}
-                    onChange={(e) => setForm((f) => ({ ...f, operatorValue: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Opérateur</label>
-                  <div className="mt-1 flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, operator: '*' }))}
-                      className={`rounded-md border px-3 py-2 text-sm font-medium ${
-                        form.operator === '*'
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      ×
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, operator: '/' }))}
-                      className={`rounded-md border px-3 py-2 text-sm font-medium ${
-                        form.operator === '/'
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      ÷
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Aperçu en direct */}
-              {preview && (
-                <p
-                  data-testid="conversion-preview"
-                  className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700"
-                >
-                  Aperçu : <strong>{preview}</strong>
-                </p>
-              )}
-            </div>
+      {/* Switch Unité dérivée */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={form.isDerived}
+          data-testid="switch-derived"
+          onClick={() => setForm((f) => ({ ...f, isDerived: !f.isDerived }))}
+          className={cn(
+            'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+            form.isDerived ? 'bg-brand-500' : 'bg-neutral-300',
           )}
+        >
+          <span
+            className={cn(
+              'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+              form.isDerived ? 'translate-x-6' : 'translate-x-1',
+            )}
+          />
+        </button>
+        <span className="text-[13.5px] font-medium text-neutral-700">Unité dérivée</span>
+      </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+      {/* Champs spécifiques aux unités dérivées */}
+      {form.isDerived && (
+        <div className="flex flex-col gap-3 rounded-card border border-neutral-200 bg-neutral-50 p-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="unit-base">
+              Unité de base <span className="text-danger-600">*</span>
+            </Label>
+            <NativeSelect
+              id="unit-base"
+              required={form.isDerived}
+              value={form.baseUnitId}
+              onChange={(e) => setForm((f) => ({ ...f, baseUnitId: e.target.value }))}
             >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              disabled={isPending}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isPending ? 'Enregistrement…' : 'Enregistrer'}
-            </button>
+              <option value="">Sélectionner une unité de base…</option>
+              {baseUnits.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.shortName})
+                </option>
+              ))}
+            </NativeSelect>
           </div>
-        </form>
-      </div>
-    </div>
-  );
-}
 
-// ─── AlertDialog suppression ─────────────────────────────────────────────────
+          <div className="flex gap-3">
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="unit-operator-value">Facteur</Label>
+              <Input
+                id="unit-operator-value"
+                type="number"
+                min="0.000001"
+                step="any"
+                required={form.isDerived}
+                value={form.operatorValue}
+                onChange={(e) => setForm((f) => ({ ...f, operatorValue: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Opérateur</Label>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, operator: '*' }))}
+                  className={cn(
+                    'h-9 rounded-field border px-3 text-[13.5px] font-medium transition-colors',
+                    form.operator === '*'
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50',
+                  )}
+                >
+                  ×
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, operator: '/' }))}
+                  className={cn(
+                    'h-9 rounded-field border px-3 text-[13.5px] font-medium transition-colors',
+                    form.operator === '/'
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50',
+                  )}
+                >
+                  ÷
+                </button>
+              </div>
+            </div>
+          </div>
 
-function DeleteDialog({
-  open,
-  unitName,
-  onCancel,
-  onConfirm,
-  isPending,
-  error,
-}: {
-  open: boolean;
-  unitName: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  isPending: boolean;
-  error: string | null;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Confirmer la suppression"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-    >
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">Supprimer l'unité</h2>
-        <p className="mb-4 text-sm text-gray-600">
-          Voulez-vous vraiment supprimer l'unité{' '}
-          <span className="font-semibold text-gray-900">"{unitName}"</span> ?
-          Cette action ne peut pas être annulée.
-        </p>
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-          >
-            Annuler
-          </button>
-          <button
-            data-testid="confirm-delete"
-            onClick={onConfirm}
-            disabled={isPending}
-            className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            {isPending ? 'Suppression…' : 'Supprimer'}
-          </button>
+          {/* Aperçu en direct */}
+          {preview && (
+            <p data-testid="conversion-preview" className="rounded-field bg-brand-50 px-3 py-2 text-[13px] text-brand-700">
+              Aperçu : <strong>{preview}</strong>
+            </p>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+
+      <SheetFooter className="border-0 px-0 pb-0 pt-2">
+        <Button type="submit" disabled={saving} loading={saving}>
+          {!saving && 'Enregistrer'}
+        </Button>
+      </SheetFooter>
+    </form>
   );
 }
 
@@ -482,9 +356,9 @@ export function UnitsPage() {
     });
   }
 
-  const activeError = editTarget ? updateUnit.error : createUnit.error;
   const isPendingForm = editTarget ? updateUnit.isPending : createUnit.isPending;
   const totalPages = data ? Math.ceil(data.total / limit) : 1;
+  const rows = data?.data ?? [];
 
   const initialForm: Partial<UnitFormData> | undefined = editTarget
     ? {
@@ -498,135 +372,161 @@ export function UnitsPage() {
     : undefined;
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-gray-900">Unités</h1>
-        <button
-          data-testid="add-unit"
-          onClick={openCreate}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-        >
-          Nouvelle unité
-        </button>
-      </div>
+    <div className="mx-auto max-w-4xl p-8">
+      <PageHeader
+        title="Unités"
+        description="Unités de mesure et conditionnements dérivés."
+        action={
+          <Button data-testid="add-unit" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nouvelle unité
+          </Button>
+        }
+      />
 
-      {/* État erreur */}
+      {/* ── État chargement ───────────────────────────────────────────────── */}
+      {isLoading && <TableSkeleton columns={4} />}
+
+      {/* ── État erreur ───────────────────────────────────────────────────── */}
       {isError && (
-        <ErrorBanner
-          message={(error as Error).message ?? 'Impossible de charger les unités.'}
+        <ErrorState
+          message={(error as Error).message || 'Impossible de charger les unités.'}
           onRetry={() => void refetch()}
         />
       )}
 
-      {/* Tableau */}
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              {['Nom', 'Nom court', 'Unité de base', 'Actions'].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500"
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {/* État chargement */}
-            {isLoading && [1, 2, 3].map((i) => <SkeletonRow key={i} />)}
+      {/* ── État vide ────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length === 0 && (
+        <EmptyState
+          icon={Ruler}
+          title="Aucune unité"
+          description="Créez votre première unité pour gérer les conditionnements."
+          action={
+            <Button data-testid="empty-add-unit" onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              Nouvelle unité
+            </Button>
+          }
+        />
+      )}
 
-            {/* État succès / partiel */}
-            {!isLoading && !isError && data?.data.map((unit) => (
-              <tr key={unit.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{unit.name}</td>
-                <td className="px-4 py-3 text-gray-500">
-                  <span className="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs">
-                    {unit.shortName}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
+      {/* ── Liste ────────────────────────────────────────────────────────── */}
+      {!isLoading && !isError && rows.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Nom</TableHead>
+              <TableHead>Nom court</TableHead>
+              <TableHead>Unité de base</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((unit) => (
+              <TableRow key={unit.id}>
+                <TableCell className="font-semibold text-neutral-900">{unit.name}</TableCell>
+                <TableCell>
+                  <Badge variant="neutral" className="font-mono">{unit.shortName}</Badge>
+                </TableCell>
+                <TableCell>
                   {unit.baseUnit ? (
                     <BaseUnitBadge unit={unit} />
                   ) : (
-                    <span className="text-gray-400 text-xs">Unité de base</span>
+                    <span className="text-[12px] text-neutral-400">Unité de base</span>
                   )}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       aria-label={`Modifier ${unit.name}`}
                       onClick={() => openEdit(unit)}
-                      className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50"
                     >
-                      Modifier
-                    </button>
-                    <button
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-danger-600 hover:bg-danger-50"
                       aria-label={`Supprimer ${unit.name}`}
                       onClick={() => setDeleteTarget(unit)}
-                      className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                     >
-                      Supprimer
-                    </button>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
+      )}
 
-        {/* État vide */}
-        {!isLoading && !isError && (!data?.data || data.data.length === 0) && (
-          <EmptyState onAdd={openCreate} />
-        )}
-      </div>
-
-      {/* État partiel — pagination */}
+      {/* ── État partiel — pagination ────────────────────────────────────── */}
       {!isLoading && !isError && data && data.total > limit && (
-        <div className="flex items-center justify-between text-sm text-gray-600">
+        <div className="mt-4 flex items-center justify-between text-[13px] text-neutral-500">
           <span>
             {(page - 1) * limit + 1}–{Math.min(page * limit, data.total)} sur {data.total} unités
           </span>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Précédent
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              className="rounded border px-3 py-1 disabled:opacity-40"
             >
               Suivant
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Modal CRUD */}
-      <UnitDialog
-        open={dialogOpen}
-        onClose={closeDialog}
-        initial={initialForm}
-        onSubmit={handleSubmit}
-        isPending={isPendingForm}
-        error={activeError ? (activeError as Error).message : null}
-        baseUnits={baseUnits}
-      />
+      {/* ── Sheet création / édition ────────────────────────────────────── */}
+      <Sheet open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{editTarget ? "Modifier l'unité" : 'Nouvelle unité'}</SheetTitle>
+            <SheetDescription>Unité simple ou dérivée d'une unité de base.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <UnitForm
+              key={editTarget?.id ?? 'new'}
+              initial={initialForm}
+              baseUnits={baseUnits}
+              onSave={handleSubmit}
+              saving={isPendingForm}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
-      {/* AlertDialog suppression */}
-      <DeleteDialog
-        open={!!deleteTarget}
-        unitName={deleteTarget?.name ?? ''}
-        onCancel={() => { setDeleteTarget(null); deleteUnit.reset(); }}
-        onConfirm={handleDelete}
-        isPending={deleteUnit.isPending}
-        error={deleteUnit.error ? (deleteUnit.error as Error).message : null}
-      />
+      {/* ── AlertDialog suppression ─────────────────────────────────────── */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer l'unité "{deleteTarget?.name ?? ''}" ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible. L'unité sera définitivement supprimée.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setDeleteTarget(null); deleteUnit.reset(); }}>
+              Annuler
+            </AlertDialogCancel>
+            <AlertDialogAction disabled={deleteUnit.isPending} onClick={handleDelete}>
+              {deleteUnit.isPending ? 'Suppression…' : 'Supprimer'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

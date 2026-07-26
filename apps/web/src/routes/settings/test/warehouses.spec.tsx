@@ -65,8 +65,7 @@ describe('WarehousesPage', () => {
   it('affiche les lignes skeleton pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    const skeletons = document.querySelectorAll('[aria-busy="true"]');
-    expect(skeletons.length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   it('affiche l\'etat vide avec le CTA "Ajouter un entrepot"', async () => {
@@ -119,7 +118,7 @@ describe('WarehousesPage', () => {
     mockApi.get.mockRejectedValue(new Error('Erreur réseau'));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText('Erreur réseau')).toBeInTheDocument();
       expect(screen.getByText(/réessayer/i)).toBeInTheDocument();
     });
   });

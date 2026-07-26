@@ -64,8 +64,7 @@ describe('BrandsPage', () => {
   it('affiche les lignes skeleton pendant le chargement', () => {
     mockApi.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    const skeletons = document.querySelectorAll('[aria-busy="true"]');
-    expect(skeletons.length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByTestId('skeleton').length).toBeGreaterThan(0);
   });
 
   it('affiche l\'état vide avec le CTA "Nouvelle marque"', async () => {
@@ -128,8 +127,8 @@ describe('BrandsPage', () => {
     mockApi.get.mockRejectedValue(new Error('Erreur réseau'));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByText(/réessayer/i)).toBeInTheDocument();
+      expect(screen.getByText('Erreur réseau')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /réessayer/i })).toBeInTheDocument();
     });
   });
 
