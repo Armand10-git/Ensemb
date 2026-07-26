@@ -258,7 +258,7 @@ function SaleForm({
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label>Client *</Label>
           <NativeSelect value={clientId} onChange={(e) => setClientId(e.target.value)} data-testid="client-select">
@@ -315,7 +315,7 @@ function SaleForm({
                 )}
               </div>
 
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <div className="space-y-1">
                   <Label className="text-[11.5px] text-neutral-500">Quantité *</Label>
                   <Input value={row.quantity} onChange={(e) => setRow(idx, 'quantity', e.target.value)} placeholder="1" />
@@ -342,7 +342,7 @@ function SaleForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           <Label className="text-[11.5px] text-neutral-500">TVA globale (%)</Label>
           <Input value={taxRate} onChange={(e) => setTaxRate(e.target.value)} />
@@ -383,7 +383,7 @@ function SaleDetailView({
 }) {
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <p className="mb-1 text-[11.5px] text-neutral-500">Référence</p>
           <p className="tabular font-semibold text-neutral-900">{sale.reference}</p>
@@ -515,7 +515,7 @@ export default function SalesPage() {
   const totalPages = Math.ceil(total / limit) || 1;
 
   return (
-    <div className="mx-auto max-w-6xl p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Ventes"
         description="Factures classiques hors point de vente."
@@ -529,7 +529,7 @@ export default function SalesPage() {
 
       {/* ── Filtres ──────────────────────────────────────────────────────── */}
       {!isLoading && !isError && (
-        <div className="mb-4 flex gap-2.5">
+        <div className="mb-4 flex flex-wrap gap-2.5">
           <NativeSelect
             className="w-auto min-w-[10rem]"
             value={filterClient}

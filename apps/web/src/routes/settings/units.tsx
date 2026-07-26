@@ -372,7 +372,7 @@ export function UnitsPage() {
     : undefined;
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
+    <div className="mx-auto max-w-4xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Unités"
         description="Unités de mesure et conditionnements dérivés."

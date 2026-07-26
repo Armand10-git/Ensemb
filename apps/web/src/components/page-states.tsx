@@ -20,12 +20,12 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex items-start justify-between gap-4">
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h1 className="font-display text-[22px] font-semibold text-neutral-900">{title}</h1>
+        <h1 className="font-display text-[20px] font-semibold text-neutral-900 sm:text-[22px]">{title}</h1>
         {description && <p className="mt-0.5 text-[13.5px] text-neutral-500">{description}</p>}
       </div>
-      {action}
+      {action && <div className="flex-shrink-0">{action}</div>}
     </div>
   );
 }

@@ -249,7 +249,7 @@ function AdjustmentForm({
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <div className="space-y-1">
                   <Label className="text-[11.5px] text-neutral-500">Type</Label>
                   <div className="flex gap-1.5">
@@ -344,7 +344,7 @@ function AdjustmentDetailView({
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <p className="mb-1 text-[11.5px] text-neutral-500">Référence</p>
           <p className="tabular font-semibold text-neutral-900">{adjustment.reference}</p>
@@ -508,7 +508,7 @@ export default function AdjustmentsPage() {
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
   return (
-    <div className="mx-auto max-w-6xl p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Ajustements de stock"
         description="Gérez les entrées et sorties manuelles de stock."
@@ -522,7 +522,7 @@ export default function AdjustmentsPage() {
 
       {/* ── Filtres ──────────────────────────────────────────────────────── */}
       {!isLoading && !isError && (
-        <div className="mb-4 flex gap-2.5">
+        <div className="mb-4 flex flex-wrap gap-2.5">
           <NativeSelect
             className="w-auto min-w-[10rem]"
             value={filterWh}

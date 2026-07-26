@@ -205,7 +205,7 @@ export function CategoriesPage() {
   const totalPages = data ? Math.ceil(data.total / limit) : 1;
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
+    <div className="mx-auto max-w-4xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Catégories"
         description="Organisez votre catalogue par catégorie."

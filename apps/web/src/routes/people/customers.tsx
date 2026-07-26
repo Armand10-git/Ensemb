@@ -175,7 +175,7 @@ function ClientForm({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="cl-email">Email</Label>
           <Input
@@ -195,7 +195,7 @@ function ClientForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="cl-country">Pays</Label>
           <Input
@@ -331,7 +331,7 @@ export default function CustomersPage() {
   const isEmpty      = !isLoading && !isError && rows.length === 0;
 
   return (
-    <div className="mx-auto max-w-6xl p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Clients"
         description="Vos clients et leurs coordonnées."
