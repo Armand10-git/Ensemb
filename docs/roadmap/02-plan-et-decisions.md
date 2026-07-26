@@ -149,6 +149,10 @@
 
 > **Alertes de stock bas volatiles.** Une alerte émise alors qu'aucun client n'est connecté serait perdue avec Socket.io seul. Le modèle `Notification` (§4) la persiste pour qu'un utilisateur la retrouve à sa prochaine connexion.
 
+> **Dette e2e ouverte par le fix S18 (`9ec86db`) — à corriger dans une session dédiée.** `JwtAuthGuard` vérifie désormais que le tenant résolu par `TenancyMiddleware` correspond à l'organisation du token (anti-IDOR inter-tenant), ce qui le rend dépendant de `TenantContextService`. Deux conséquences détectées et partiellement corrigées pendant S19 :
+> 1. ✅ Corrigé (S19) — `TenancyMiddleware.extractSubdomain` traitait une adresse IPv4 littérale (ex. `127.0.0.1`, hôte par défaut de `supertest`) comme un sous-domaine (`"127"` matche `SUBDOMAIN_REGEX`), court-circuitant le fallback `X-Organization-Id` prévu pour le dev/CLI/tests. Garde IPv4 ajoutée + mock `tenancy.middleware.spec.ts` corrigé (`headers: {}` manquant).
+> 2. ❌ Non corrigé, hors périmètre S19 — 16 des 20 suites e2e (`transfer`, `adjustment`, `product`, `catalog`, `partners`, `warehouse`, `unit`, `product-warehouse`, `notification`, `uploads`, `branding`, `backup`, `billing`, `billing-webhook`, `encryption`, `auth`) n'importent pas `TenancyModule` dans leur `Test.createTestingModule`, alors que `JwtAuthGuard` en a désormais besoin pour toute route protégée — chaque requête échoue en 500 (`Cannot read properties of undefined (reading 'tryGetOrganizationId')`). `sale.e2e.spec.ts` (S19) importe `TenancyModule` et passe un header `X-Organization-Id` sur chaque requête authentifiée — patron à reproduire dans les 16 suites concernées avant de pouvoir se fier de nouveau à `pnpm test:e2e` sur l'ensemble du projet.
+
 ---
 
 ## 15. Checklist de recette finale

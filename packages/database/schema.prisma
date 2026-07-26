@@ -203,6 +203,7 @@ model Organization {
   adjustments      Adjustment[]
   transfers        StockTransfer[]
   notifications    Notification[]
+  sales            Sale[]
 
   @@map("organizations")
 }
@@ -282,6 +283,7 @@ model User {
   adjustments   Adjustment[]
   transfers     StockTransfer[]
   notifications Notification[]
+  sales         Sale[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -410,6 +412,7 @@ model Warehouse {
   adjustments     Adjustment[]
   transfersFrom   StockTransfer[]   @relation("TransferFrom")
   transfersTo     StockTransfer[]   @relation("TransferTo")
+  sales           Sale[]
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
@@ -506,6 +509,7 @@ model Product {
   stocks             ProductWarehouse[]
   adjustmentDetails  AdjustmentDetail[]
   transferDetails    StockTransferDetail[]
+  saleDetails        SaleDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -604,6 +608,7 @@ model Client {
   address        String?
   deletedAt      DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
+  sales          Sale[]
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -809,4 +814,118 @@ model Notification {
 
   @@index([organizationId, userId, readAt])
   @@map("notifications")
+}
+
+// ─── Ventes classiques hors-POS (S19 — Bloc E) ───────────────────────────────
+
+/// Statut de paiement d'un document financier — toujours dérivé des paiements,
+/// jamais saisi manuellement (§17 point 6). Posé à UNPAID à la création (S19) ;
+/// recalculé par PaymentSale en S20.
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  UNPAID
+}
+
+/// Statut de cycle de vie d'un document financier (vente, achat, devis…).
+/// PENDING = créé, modifiable/supprimable. AWAITING_PAYMENT = paiement mobile money
+/// en attente de webhook (S20). COMPLETED = finalisé, immuable. CANCELLED = annulé
+/// avec restitution de stock (S21b) — jamais de suppression physique (§17 point 7).
+enum DocumentStatus {
+  PENDING
+  AWAITING_PAYMENT
+  COMPLETED
+  CANCELLED
+}
+
+/// En-tête d'une vente classique hors-POS (S19 — Bloc E, §18.3).
+/// Patron identique à Adjustment/StockTransfer : organizationId sur l'en-tête uniquement,
+/// reference générée via DocumentCounterService.nextReference dans la transaction de
+/// création (§17 point X) — format VTE-YYYY-NNNNNN.
+/// grandTotal et les totaux de ligne sont calculés côté serveur uniquement, jamais
+/// depuis le body client (§17 point A). paidAmount reste à 0 tant que S20 (PaymentSale)
+/// n'est pas branché ; paymentStatus reste UNPAID à la création.
+/// Soft delete uniquement (deletedAt) — un document COMPLETED ou CANCELLED est immuable
+/// (§17 point 7) : ni modification, ni suppression, réservées au statut PENDING.
+model Sale {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "VTE-2026-000001")
+  reference      String
+  date           DateTime
+  /// true = vente issue du POS (S22–S23) — S19 ne crée que des ventes classiques (false)
+  isPos          Boolean        @default(false)
+  userId         String         @db.Uuid
+  clientId       String         @db.Uuid
+  warehouseId    String         @db.Uuid
+  /// Taux de TVA global — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
+  taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Montant de TVA global si taxMethod global = "fixed"
+  taxAmount      Decimal?       @default(0) @db.Decimal(14, 3)
+  discount       Decimal?       @default(0) @db.Decimal(14, 3)
+  shipping       Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Total calculé côté serveur — jamais depuis le body client (§17 point A)
+  grandTotal     Decimal        @default(0) @db.Decimal(14, 3)
+  /// Somme des paiements — posé à 0 en S19, mis à jour par PaymentSale en S20
+  paidAmount     Decimal        @default(0) @db.Decimal(14, 3)
+  paymentStatus  PaymentStatus  @default(UNPAID)
+  status         DocumentStatus @default(PENDING)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  client       Client        @relation(fields: [clientId], references: [id])
+  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+  details      SaleDetail[]
+  payments     PaymentSale[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([organizationId, paymentStatus])
+  @@map("sales")
+}
+
+/// Ligne d'une vente (S19 — Bloc E).
+/// price/taxAmount/discount/quantity/total en Decimal — jamais Float (§17 point A).
+/// L'organizationId n'est pas répété ici — hérité via sale.organizationId.
+/// total = (price × quantity) + taxLigne − remiseLigne, calculé côté serveur (voir SaleService).
+model SaleDetail {
+  id               String   @id @default(uuid()) @db.Uuid
+  saleId           String   @db.Uuid
+  productId        String   @db.Uuid
+  productVariantId String?  @db.Uuid
+  /// Unité de vente choisie pour cette ligne — optionnelle, référence Unit (conversion §17)
+  saleUnitId       String?  @db.Uuid
+  price            Decimal  @db.Decimal(14, 3)
+  taxAmount        Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  taxMethod        String?  @default("percentage")
+  discount         Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  discountMethod   String?  @default("percentage")
+  quantity         Decimal  @db.Decimal(14, 3)
+  total            Decimal  @db.Decimal(14, 3)
+
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("sale_details")
+}
+
+/// Stub minimal (S19) — table créée maintenant pour que la relation Sale.payments soit
+/// valide sans migration destructive ultérieure ; les champs métier (userId, date,
+/// reference, amount, method, change, notes) et le recalcul de paymentStatus seront
+/// ajoutés en S20 par des colonnes additives (jamais de colonne requise sans défaut sur
+/// une table déjà peuplée).
+model PaymentSale {
+  id        String   @id @default(uuid()) @db.Uuid
+  saleId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  sale Sale @relation(fields: [saleId], references: [id])
+
+  @@map("payment_sales")
 }

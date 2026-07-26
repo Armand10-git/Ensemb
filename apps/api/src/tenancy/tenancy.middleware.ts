@@ -4,6 +4,9 @@ import { TenantContextService } from './tenant-context.service';
 import { TenancyService } from './tenancy.service';
 import { SUBDOMAIN_REGEX } from './tenancy.constants';
 
+/** Détecte une adresse IPv4 littérale (ex. 127.0.0.1) — jamais un sous-domaine valide. */
+const IPV4_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
 /**
  * Extrait le sous-domaine du header Host, résout l'organisation via Redis (cache)
  * puis Prisma (fallback), et alimente l'AsyncLocalStorage tenant.
@@ -63,8 +66,12 @@ export class TenancyMiddleware implements NestMiddleware {
     // Retire le port si présent (ex. localhost:3000)
     const host = hostname.split(':')[0] ?? '';
 
-    // En dev (localhost ou IP), pas de sous-domaine à extraire
-    if (!host.includes('.')) return null;
+    // En dev (localhost ou IP), pas de sous-domaine à extraire.
+    // Une adresse IPv4 (ex. 127.0.0.1, hôte par défaut de supertest/Node en test)
+    // contient des points mais n'est jamais un sous-domaine valide — sans cette garde,
+    // son premier octet ("127") matche SUBDOMAIN_REGEX et court-circuite le fallback
+    // X-Organization-Id prévu pour ce cas (dev localhost, mobile, outils CLI).
+    if (!host.includes('.') || IPV4_REGEX.test(host)) return null;
 
     const parts = host.split('.');
     const sub = parts[0] ?? '';

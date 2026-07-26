@@ -26,6 +26,11 @@ const IconUsers = () => (
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zm12 2c0-2.21-1.79-4-4-4" />
   </svg>
 );
+const IconReceipt = () => (
+  <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 14l2 2 4-4m5 5V5a2 2 0 00-2-2H6a2 2 0 00-2 2v16l3-2 3 2 3-2 3 2 3-2z" />
+  </svg>
+);
 const IconTruck = () => (
   <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0zM13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10m9 0H3m10 0h6v-4l-3-3h-3v7z" />
@@ -133,6 +138,9 @@ export function AppLayout() {
         <nav className="flex-1 overflow-y-auto px-3 py-2">
           <SectionLabel>Catalogue</SectionLabel>
           <NavLink to="/catalog/products"       label="Produits"     icon={<IconBox />} />
+
+          <SectionLabel>Ventes</SectionLabel>
+          <NavLink to="/sales"                  label="Ventes"       icon={<IconReceipt />} />
 
           <SectionLabel>Inventaire</SectionLabel>
           <NavLink to="/inventory/adjustments"  label="Ajustements"  icon={<IconPlus />} />

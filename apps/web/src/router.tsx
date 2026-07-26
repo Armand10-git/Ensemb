@@ -10,6 +10,7 @@ import { LoginPage } from './routes/login';
 import ProductsPage    from './routes/catalog/products';
 import AdjustmentsPage from './routes/adjustments/index';
 import TransfersPage   from './routes/transfers/index';
+import SalesPage       from './routes/sales/index';
 import CustomersPage   from './routes/people/customers';
 import SuppliersPage   from './routes/people/suppliers';
 import BrandsPage      from './routes/settings/brands';
@@ -55,6 +56,7 @@ const indexRoute = createRoute({
 const productsRoute     = createRoute({ getParentRoute: () => appRoute, path: '/catalog/products',      component: ProductsPage });
 const adjustmentsRoute  = createRoute({ getParentRoute: () => appRoute, path: '/inventory/adjustments', component: AdjustmentsPage });
 const transfersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/inventory/transfers',   component: TransfersPage });
+const salesRoute        = createRoute({ getParentRoute: () => appRoute, path: '/sales',                 component: SalesPage });
 const customersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/customers',      component: CustomersPage });
 const suppliersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/suppliers',      component: SuppliersPage });
 const brandsRoute       = createRoute({ getParentRoute: () => appRoute, path: '/settings/brands',       component: BrandsPage });
@@ -72,6 +74,7 @@ const routeTree = rootRoute.addChildren([
     productsRoute,
     adjustmentsRoute,
     transfersRoute,
+    salesRoute,
     customersRoute,
     suppliersRoute,
     brandsRoute,
