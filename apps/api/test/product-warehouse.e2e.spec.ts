@@ -26,6 +26,7 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { RealtimeModule } from '../src/modules/realtime/realtime.module';
 import { InventoryModule } from '../src/modules/inventory/inventory.module';
 import { NotificationModule } from '../src/modules/notifications/notification.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(30_000);
 
@@ -122,6 +123,7 @@ beforeAll(async () => {
       RealtimeModule,
       InventoryModule,
       NotificationModule,
+      TenancyModule,
     ],
   }).compile();
 
@@ -162,6 +164,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res.status).toBe(200);
@@ -177,11 +180,13 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res1 = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     const res2 = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res1.status).toBe(200);
@@ -192,6 +197,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
+      .set('X-Organization-Id', orgAId)
       .send({ productId: productAId, warehouseId: warehouseAId });
 
     expect(res.status).toBe(401);
@@ -201,6 +207,7 @@ describe('POST /api/v1/inventory/stock/init', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/inventory/stock/init')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ productId: 'pas-un-uuid' });
 
     expect(res.status).toBe(400);
@@ -213,7 +220,8 @@ describe('GET /api/v1/inventory/stock/product/:productId', () => {
   it('200 — retourne les stocks du produit par entrepôt', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/product/${productAId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -224,7 +232,8 @@ describe('GET /api/v1/inventory/stock/product/:productId', () => {
   it('isolation — tenant B ne peut pas voir le stock du produit de tenant A', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/product/${productAId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     // ForbiddenException (403) car produit n'appartient pas à org B
     expect(res.status).toBe(403);
@@ -237,7 +246,8 @@ describe('GET /api/v1/inventory/stock/warehouse/:warehouseId', () => {
   it("200 — retourne le stock paginé de l'entrepôt", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/warehouse/${warehouseAId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ data: expect.any(Array), total: expect.any(Number) });
@@ -246,7 +256,8 @@ describe('GET /api/v1/inventory/stock/warehouse/:warehouseId', () => {
   it("isolation — tenant B ne peut pas voir le stock de l'entrepôt de tenant A", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/inventory/stock/warehouse/${warehouseAId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(403);
   });

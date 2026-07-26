@@ -22,6 +22,9 @@ export const PRISMA_TENANT_CLIENT = 'PRISMA_TENANT_CLIENT';
  * /api/v1/auth/* sont des endpoints publics d'authentification.
  * /api/v1/public/* est l'endpoint de résolution de tenant pour le mobile.
  * /api/v1/platform-admin/* est la console plateforme — auth séparée, jamais via un tenant.
+ * /api/v1/webhooks/* sont appelés par l'agrégateur de paiement sur une URL plateforme sans
+ * sous-domaine tenant — sécurité assurée par la signature de l'agrégateur et l'idempotence
+ * WebhookEvent (§17 point V), pas par la résolution tenant (cf. tenancy.middleware.ts).
  */
 const EXEMPT_ROUTES = [
   { path: '/health', method: RequestMethod.GET },
@@ -29,6 +32,7 @@ const EXEMPT_ROUTES = [
   { path: '/api/v1/auth/(.*)', method: RequestMethod.ALL },
   { path: '/api/v1/public/(.*)', method: RequestMethod.ALL },
   { path: '/api/v1/platform-admin/(.*)', method: RequestMethod.ALL },
+  { path: '/api/v1/webhooks/(.*)', method: RequestMethod.ALL },
 ];
 
 @Global()

@@ -29,6 +29,7 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { CatalogModule } from '../src/modules/catalog/catalog.module';
 import { UploadsModule } from '../src/modules/uploads/uploads.module';
 import { StorageService } from '../src/modules/uploads/storage.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(30_000);
 
@@ -109,6 +110,7 @@ beforeAll(async () => {
       RedisModule,
       AuditModule,
       AuthModule,
+      TenancyModule,
       UploadsModule,
       CatalogModule,
     ],
@@ -174,6 +176,7 @@ describe('POST /api/v1/catalog/products', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send(baseProduct());
 
     expect(res.status).toBe(201);
@@ -187,11 +190,13 @@ describe('POST /api/v1/catalog/products', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code, name: `Dup-1-${SUFFIX}` });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code, name: `Dup-2-${SUFFIX}` });
 
     expect(res.status).toBe(409);
@@ -203,11 +208,13 @@ describe('POST /api/v1/catalog/products', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code, name: `Share-A-${SUFFIX}` });
 
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ ...baseProduct(SUFFIX, catBId), code, name: `Share-B-${SUFFIX}` });
 
     expect(res.status).toBe(201);
@@ -217,6 +224,7 @@ describe('POST /api/v1/catalog/products', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `IDOR${SUFFIX % 1000}`, categoryId: catBId });
 
     expect(res.status).toBe(403);
@@ -226,6 +234,7 @@ describe('POST /api/v1/catalog/products', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Sans code', cost: '100', price: '200' });
 
     expect(res.status).toBe(422);
@@ -234,6 +243,7 @@ describe('POST /api/v1/catalog/products', () => {
   it('401 — sans token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
+      .set('X-Organization-Id', orgAId)
       .send(baseProduct());
     expect(res.status).toBe(401);
   });
@@ -245,7 +255,8 @@ describe('GET /api/v1/catalog/products', () => {
   it("200 — retourne uniquement les produits du tenant A", async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/products')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('data');
@@ -260,6 +271,7 @@ describe('GET /api/v1/catalog/products', () => {
     const prodRes = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `IMG${SUFFIX % 1000}`, name: `WithImg-${SUFFIX}` });
     const prodId = (prodRes.body as { id: string }).id;
 
@@ -267,11 +279,13 @@ describe('GET /api/v1/catalog/products', () => {
     await supertest(app.getHttpServer())
       .post(`/api/v1/catalog/products/${prodId}/image`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpegBuf, { filename: 'img.jpg', contentType: 'image/jpeg' });
 
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/products')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     const found = (list.body.data as { id: string; imageUrl: string | null }[]).find((p) => p.id === prodId);
     expect(found).toBeDefined();
@@ -288,6 +302,7 @@ describe('GET /api/v1/catalog/products/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `DT${SUFFIX % 1000}`, name: `Detail-${SUFFIX}` });
     prodId = (res.body as { id: string }).id;
   });
@@ -295,7 +310,8 @@ describe('GET /api/v1/catalog/products/:id', () => {
   it("200 — retourne le produit du tenant", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/products/${prodId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(prodId);
   });
@@ -303,7 +319,8 @@ describe('GET /api/v1/catalog/products/:id', () => {
   it("403 ou 404 — tenant B ne peut pas voir le produit du tenant A", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/products/${prodId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
     expect([403, 404]).toContain(res.status);
   });
 });
@@ -317,6 +334,7 @@ describe('PATCH /api/v1/catalog/products/:id', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `UP${SUFFIX % 1000}`, name: `Update-${SUFFIX}` });
     prodId = (res.body as { id: string }).id;
   });
@@ -325,6 +343,7 @@ describe('PATCH /api/v1/catalog/products/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/products/${prodId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: `Updated-${SUFFIX}` });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe(`Updated-${SUFFIX}`);
@@ -334,6 +353,7 @@ describe('PATCH /api/v1/catalog/products/:id', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/catalog/products/${prodId}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .send({ name: 'Hack' });
     expect([403, 404]).toContain(res.status);
   });
@@ -348,6 +368,7 @@ describe('POST /api/v1/catalog/products/:id/image', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `IM${SUFFIX % 1000}`, name: `Imageable-${SUFFIX}` });
     prodId = (res.body as { id: string }).id;
   });
@@ -360,6 +381,7 @@ describe('POST /api/v1/catalog/products/:id/image', () => {
     const res = await supertest(app.getHttpServer())
       .post(`/api/v1/catalog/products/${prodId}/image`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpegBuf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
 
     expect(res.status).toBe(201);
@@ -385,6 +407,7 @@ describe('Variantes — POST + DELETE /catalog/products/:id/variants', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({
         ...baseProduct(), code: `VA${SUFFIX % 1000}`, name: `Variante-${SUFFIX}`,
         isVariant: true,
@@ -397,6 +420,7 @@ describe('Variantes — POST + DELETE /catalog/products/:id/variants', () => {
     const res = await supertest(app.getHttpServer())
       .post(`/api/v1/catalog/products/${prodId}/variants`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Bleu / M' });
 
     expect(res.status).toBe(201);
@@ -407,7 +431,8 @@ describe('Variantes — POST + DELETE /catalog/products/:id/variants', () => {
   it("GET produit inclut la variante créée", async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/products/${prodId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const variants = res.body.variants as { id: string; name: string }[];
     expect(variants.some((v) => v.id === variantId)).toBe(true);
   });
@@ -415,13 +440,15 @@ describe('Variantes — POST + DELETE /catalog/products/:id/variants', () => {
   it("204 — suppression de variante (soft-delete)", async () => {
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/products/${prodId}/variants/${variantId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     // La variante n'apparaît plus dans la liste
     const prod = await supertest(app.getHttpServer())
       .get(`/api/v1/catalog/products/${prodId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (prod.body.variants as { id: string }[]).map((v) => v.id);
     expect(ids).not.toContain(variantId);
   });
@@ -434,18 +461,21 @@ describe('DELETE /api/v1/catalog/products/:id', () => {
     const created = await supertest(app.getHttpServer())
       .post('/api/v1/catalog/products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ ...baseProduct(), code: `DEL${SUFFIX % 1000}`, name: `ToDelete-${SUFFIX}` });
     const id = (created.body as { id: string }).id;
 
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/catalog/products/${id}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     expect(res.status).toBe(204);
 
     // Absent de la liste
     const list = await supertest(app.getHttpServer())
       .get('/api/v1/catalog/products')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
     const ids = (list.body.data as { id: string }[]).map((p) => p.id);
     expect(ids).not.toContain(id);
 

@@ -26,13 +26,20 @@ export class TenancyMiddleware implements NestMiddleware {
     // avec les patterns path-to-regexp — on gère ici en défense secondaire)
     // NestJS manipule req.path lors du dispatch de middleware — il faut req.originalUrl
     // pour obtenir le chemin complet original de la requête.
+    // /api/v1/webhooks/* : l'agrégateur de paiement appelle une URL plateforme sans
+    // sous-domaine tenant (ex. PAYMENT_AGGREGATOR_CALLBACK_URL) — un Host sans sous-domaine
+    // ferait 404 avant même d'atteindre le contrôleur, cassant la confirmation de paiement.
+    // La sécurité de ces routes repose sur la signature de l'agrégateur et l'idempotence
+    // WebhookEvent (§17 point V), pas sur la résolution tenant ; le tenant concerné est
+    // retrouvé depuis le payload ou le paramètre :organizationId de l'URL, pas depuis le Host.
     const p = (req.originalUrl ?? req.url ?? '').split('?')[0] ?? '/';
     if (
       p === '/health' ||
       p === '/ready' ||
       p.startsWith('/api/v1/auth/') ||
       p.startsWith('/api/v1/public/') ||
-      p.startsWith('/api/v1/platform-admin/')
+      p.startsWith('/api/v1/platform-admin/') ||
+      p.startsWith('/api/v1/webhooks/')
     ) {
       return next();
     }

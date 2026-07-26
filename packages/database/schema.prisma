@@ -885,6 +885,10 @@ model Sale {
   @@unique([organizationId, reference])
   @@index([organizationId, status])
   @@index([organizationId, paymentStatus])
+  /// Chemin le plus fréquent de findAll (viewAll=false, §17 — index requis pour toute requête filtrée)
+  @@index([organizationId, userId])
+  @@index([organizationId, clientId])
+  @@index([organizationId, warehouseId])
   @@map("sales")
 }
 

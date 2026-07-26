@@ -29,6 +29,7 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { RolesModule } from '../src/modules/roles/roles.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { UploadsModule } from '../src/modules/uploads/uploads.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 jest.setTimeout(60_000);
 
@@ -128,6 +129,7 @@ beforeAll(async () => {
       AuthModule,
       RolesModule,
       AuditModule,
+      TenancyModule,
       UploadsModule,
     ],
   }).compile();
@@ -175,6 +177,7 @@ describe('POST /api/v1/uploads/images', () => {
   it('sans token → 401', async () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
+      .set('X-Organization-Id', orgAId)
       .attach('file', Buffer.from([0xff, 0xd8, 0xff]), 'photo.jpg')
       .expect(401);
   });
@@ -185,6 +188,7 @@ describe('POST /api/v1/uploads/images', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpeg, { filename: 'photo.jpg', contentType: 'image/jpeg' })
       .expect(201);
 
@@ -197,6 +201,7 @@ describe('POST /api/v1/uploads/images', () => {
     await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', makePdfBuffer(), { filename: 'doc.pdf', contentType: 'application/pdf' })
       .expect(415);
   });
@@ -207,6 +212,7 @@ describe('POST /api/v1/uploads/images', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=products')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', big, { filename: 'huge.jpg', contentType: 'image/jpeg' });
 
     expect([400, 413]).toContain(res.status);
@@ -222,6 +228,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/uploads/images?type=logos')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', jpeg, { filename: 'logo.jpg', contentType: 'image/jpeg' });
 
     uploadedKey = (res.body as { s3Key: string }).s3Key;
@@ -232,6 +239,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/uploads/images/signed-url?key=${encodeURIComponent(uploadedKey)}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .expect(200);
 
     const body = res.body as { url: string; expiresIn: number };
@@ -245,6 +253,7 @@ describe('GET /api/v1/uploads/images/signed-url', () => {
     await supertest(app.getHttpServer())
       .get(`/api/v1/uploads/images/signed-url?key=${encodeURIComponent(uploadedKey)}`)
       .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId)
       .expect(403);
   });
 });

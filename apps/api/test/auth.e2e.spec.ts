@@ -6,13 +6,14 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
 import bcrypt from 'bcryptjs';
-import { getTestPrisma } from '../../../../test/helpers/prisma';
-import { PrismaModule } from '../../../common/prisma.module';
-import { RedisModule } from '../../../common/redis.module';
-import { AuthController } from '../auth.controller';
-import { AuthService } from '../auth.service';
-import { JwtStrategy } from '../strategies/jwt.strategy';
-import { JwtRefreshStrategy } from '../strategies/jwt-refresh.strategy';
+import { getTestPrisma } from './helpers/prisma';
+import { PrismaModule } from '../src/common/prisma.module';
+import { RedisModule } from '../src/common/redis.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
+import { AuthController } from '../src/modules/auth/auth.controller';
+import { AuthService } from '../src/modules/auth/auth.service';
+import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
+import { JwtRefreshStrategy } from '../src/modules/auth/strategies/jwt-refresh.strategy';
 
 /**
  * Tests d'integration AuthModule — Supertest contre Postgres + Redis locaux.
@@ -62,6 +63,7 @@ beforeAll(async () => {
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
       PrismaModule,
       RedisModule,
+      TenancyModule,
       PassportModule,
       JwtModule.register({}),
     ],
@@ -158,6 +160,7 @@ describe('POST /api/v1/auth/logout', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/auth/logout')
       .set('Authorization', `Bearer ${accessToken}`)
+      .set('X-Organization-Id', orgId)
       .send({ refreshToken });
 
     expect(res.status).toBe(204);
@@ -166,6 +169,7 @@ describe('POST /api/v1/auth/logout', () => {
   it('401 si pas de Bearer token', async () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/auth/logout')
+      .set('X-Organization-Id', orgId)
       .send({ refreshToken });
 
     expect(res.status).toBe(401);

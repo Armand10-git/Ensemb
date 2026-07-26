@@ -17,6 +17,7 @@ import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaModule } from '../src/common/prisma.module';
+import { RedisModule } from '../src/common/redis.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { EncryptionService } from '../src/common/encryption.service';
 import { AuditModule } from '../src/modules/audit/audit.module';
@@ -24,6 +25,7 @@ import { SmtpModule } from '../src/modules/smtp/smtp.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { PrismaService } from '../src/common/prisma.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 import crypto from 'crypto';
 
 const PREFIX = `t07b-enc-${Date.now()}`;
@@ -62,8 +64,10 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
         PassportModule,
         JwtModule.register({}),
         PrismaModule,
+        RedisModule,
         EncryptionModule,
         AuditModule,
+        TenancyModule,
         SmtpModule,
         BillingModule,
       ],
@@ -159,6 +163,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
       const res = await request(app.getHttpServer())
         .put('/api/v1/organizations/smtp')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .send({
           host: 'smtp.example.com',
           port: 587,
@@ -180,6 +185,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
     it('renvoie 401 sans token', async () => {
       await request(app.getHttpServer())
         .put('/api/v1/organizations/smtp')
+        .set('X-Organization-Id', orgId)
         .send({ host: 'x', port: 587, username: 'u', password: 'p', fromEmail: 'a@b.com', fromName: 'N' })
         .expect(401);
     });
@@ -251,6 +257,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
 
       await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
+        .set('X-Organization-Id', orgId)
         .set('x-aggregator-signature', sig)
         .send(payload)
         .expect(200)
@@ -270,6 +277,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
 
       await request(app.getHttpServer())
         .post('/api/v1/webhooks/billing')
+        .set('X-Organization-Id', orgId)
         .set('x-aggregator-signature', sig)
         .send(payload)
         .expect(200)
@@ -296,6 +304,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
 
       await request(app.getHttpServer())
         .post(`/api/v1/webhooks/payments/${orgId}`)
+        .set('X-Organization-Id', orgId)
         .set('x-aggregator-signature', sig)
         .send(payload)
         .expect(200)
@@ -310,6 +319,7 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
 
       await request(app.getHttpServer())
         .post(`/api/v1/webhooks/payments/${orgId}`)
+        .set('X-Organization-Id', orgId)
         .set('x-aggregator-signature', sig)
         .send(payload)
         .expect(200)

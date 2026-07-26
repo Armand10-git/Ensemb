@@ -110,7 +110,6 @@ export class SaleController {
   @RequirePermission('sales.create')
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @Auditable({ action: 'sales.create', entity: 'Sale' })
   create(@Req() req: AuthenticatedRequest, @Body() body: unknown) {
     const result = CreateSaleSchema.safeParse(body);
     if (!result.success) {

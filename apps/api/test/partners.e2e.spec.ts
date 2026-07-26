@@ -19,6 +19,7 @@ import { RedisModule } from '../src/common/redis.module';
 import { AuthModule } from '../src/modules/auth/auth.module';
 import { RolesModule } from '../src/modules/roles/roles.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { PartnersModule } from '../src/modules/partners/partners.module';
 
 jest.setTimeout(60_000);
@@ -119,6 +120,7 @@ beforeAll(async () => {
       AuthModule,
       RolesModule,
       AuditModule,
+      TenancyModule,
       PartnersModule,
     ],
   }).compile();
@@ -163,6 +165,7 @@ describe('CRUD Clients', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Acme Corp', email: 'acme@test.cm', city: 'Douala' });
 
     expect(res.status).toBe(201);
@@ -173,7 +176,8 @@ describe('CRUD Clients', () => {
   it('GET /clients — liste paginée (200)', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/partners/clients?page=1&limit=20')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(Array.isArray((res.body as { data: unknown[] }).data)).toBe(true);
@@ -182,7 +186,8 @@ describe('CRUD Clients', () => {
   it('GET /clients/:id — détail (200)', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/partners/clients/${clientId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect((res.body as { id: string }).id).toBe(clientId);
@@ -192,6 +197,7 @@ describe('CRUD Clients', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/partners/clients/${clientId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ city: 'Yaoundé' });
 
     expect(res.status).toBe(200);
@@ -201,7 +207,8 @@ describe('CRUD Clients', () => {
   it('DELETE /clients/:id — soft-delete (204)', async () => {
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/partners/clients/${clientId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(204);
   });
@@ -209,7 +216,8 @@ describe('CRUD Clients', () => {
   it('GET /clients/:id — 404 après soft-delete', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/partners/clients/${clientId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(404);
   });
@@ -224,6 +232,7 @@ describe('CRUD Providers', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/providers')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Fournisseur Sarl', phone: '+237600000001' });
 
     expect(res.status).toBe(201);
@@ -235,6 +244,7 @@ describe('CRUD Providers', () => {
     const res = await supertest(app.getHttpServer())
       .patch(`/api/v1/partners/providers/${providerId}`)
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ city: 'Bafoussam' });
 
     expect(res.status).toBe(200);
@@ -244,7 +254,8 @@ describe('CRUD Providers', () => {
   it('DELETE /providers/:id — soft-delete (204)', async () => {
     const res = await supertest(app.getHttpServer())
       .delete(`/api/v1/partners/providers/${providerId}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(204);
   });
@@ -259,6 +270,7 @@ describe('Import CSV Clients', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients/import')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', Buffer.from(csv), { filename: 'clients.csv', contentType: 'text/csv' });
 
     expect(res.status).toBe(201);
@@ -272,6 +284,7 @@ describe('Import CSV Clients', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients/import')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', Buffer.from(csv), { filename: 'clients.csv', contentType: 'text/csv' });
 
     expect(res.status).toBe(201);
@@ -283,6 +296,7 @@ describe('Import CSV Clients', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients/import')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .attach('file', Buffer.from('<html>fake</html>'), { filename: 'clients.html', contentType: 'text/html' });
 
     expect(res.status).toBe(422);
@@ -295,7 +309,8 @@ describe('Export Excel', () => {
   it('GET /clients/export/excel → 202 + jobId', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/partners/clients/export/excel')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(202);
     expect((res.body as { jobId: string }).jobId).toBeDefined();
@@ -308,7 +323,8 @@ describe('Template CSV', () => {
   it('GET /clients/template → CSV avec les bons en-têtes', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/partners/clients/template')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/csv');
@@ -326,6 +342,7 @@ describe('Isolation tenant', () => {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/partners/clients')
       .set('Authorization', `Bearer ${tokenA}`)
+      .set('X-Organization-Id', orgAId)
       .send({ name: 'Client isolé org A' });
     clientAId = (res.body as { id: string }).id;
   });
@@ -333,7 +350,8 @@ describe('Isolation tenant', () => {
   it('org B ne peut pas accéder au client de org A (403)', async () => {
     const res = await supertest(app.getHttpServer())
       .get(`/api/v1/partners/clients/${clientAId}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(403);
   });
@@ -341,7 +359,8 @@ describe('Isolation tenant', () => {
   it('org B ne voit pas les clients de org A dans sa liste', async () => {
     const res = await supertest(app.getHttpServer())
       .get('/api/v1/partners/clients')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Authorization', `Bearer ${tokenB}`)
+      .set('X-Organization-Id', orgBId);
 
     expect(res.status).toBe(200);
     const ids = ((res.body as { data: { id: string }[] }).data).map(c => c.id);

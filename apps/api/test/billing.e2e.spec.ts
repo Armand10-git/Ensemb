@@ -15,6 +15,7 @@ import { JwtModule, JwtService } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import request from 'supertest';
 import { PrismaModule } from '../src/common/prisma.module';
+import { RedisModule } from '../src/common/redis.module';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { RegistrationModule } from '../src/modules/registration/registration.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
@@ -23,6 +24,7 @@ import { JwtAuthGuard } from '../src/modules/auth/guards/jwt-auth.guard';
 import { QuotaGuard } from '../src/modules/billing/quota.guard';
 import { CheckQuota } from '../src/modules/billing/check-quota.decorator';
 import { PrismaService } from '../src/common/prisma.service';
+import { TenancyModule } from '../src/tenancy/tenancy.module';
 
 const PREFIX = `t06-test-${Date.now()}`;
 const TEST_JWT_SECRET = 'test-jwt-secret-t06-billing';
@@ -59,7 +61,9 @@ describe('BillingModule (e2e)', () => {
         PassportModule,
         JwtModule.register({}),
         PrismaModule,
+        RedisModule,
         AuditModule,
+        TenancyModule,
         RegistrationModule,
         BillingModule,
       ],
@@ -259,22 +263,24 @@ describe('BillingModule (e2e)', () => {
     }
 
     it('laisse passer quand le quota n\'est pas atteint (count < max)', async () => {
-      const { token } = await createOrgWithUsers(`${PREFIX}-quota-ok`, 1, 5);
+      const { token, orgId } = await createOrgWithUsers(`${PREFIX}-quota-ok`, 1, 5);
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/test-quota/users')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .expect(201);
 
       expect(res.body).toEqual({ ok: true });
     }, 15_000);
 
     it('renvoie 403 explicite quand le quota est dépassé (count >= max)', async () => {
-      const { token } = await createOrgWithUsers(`${PREFIX}-quota-full`, 5, 5);
+      const { token, orgId } = await createOrgWithUsers(`${PREFIX}-quota-full`, 5, 5);
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/test-quota/users')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .expect(403);
 
       const message = res.body.message as string;
@@ -286,11 +292,12 @@ describe('BillingModule (e2e)', () => {
     }, 15_000);
 
     it('laisse passer si maxUsers est null (plan illimité)', async () => {
-      const { token } = await createOrgWithUsers(`${PREFIX}-quota-unlimited`, 50, null);
+      const { token, orgId } = await createOrgWithUsers(`${PREFIX}-quota-unlimited`, 50, null);
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/test-quota/users')
         .set('Authorization', `Bearer ${token}`)
+        .set('X-Organization-Id', orgId)
         .expect(201);
 
       expect(res.body).toEqual({ ok: true });
@@ -299,6 +306,7 @@ describe('BillingModule (e2e)', () => {
     it('renvoie 401 sans token', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/test-quota/users')
+        .set('X-Organization-Id', '00000000-0000-0000-0000-000000000000')
         .expect(401);
     });
   });
