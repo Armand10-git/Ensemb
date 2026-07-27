@@ -300,3 +300,104 @@ describe('SalesPage — Paiements (S20)', () => {
     expect(screen.getByText('Enregistrer')).toBeInTheDocument();
   });
 });
+
+// ─── Validation de vente (S21) ──────────────────────────────────────────────────
+
+describe('SalesPage — Validation (S21)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Route la vente/l'historique des paiements (vide, non pertinent ici) en plus des fixtures partagées. */
+  function mockGet(saleDetail: ReturnType<typeof makeSale>) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments'))          return Promise.resolve([]);
+      if (path.includes('/sales?'))            return Promise.resolve(saleListResp);
+      if (path.includes('/sales/'))            return Promise.resolve(saleDetail);
+      return Promise.resolve(emptySales);
+    });
+  }
+
+  async function openDetail() {
+    renderPage();
+    await waitFor(() => screen.getByText('VTE-2026-000001'));
+    await userEvent.click(screen.getByText('VTE-2026-000001'));
+    await waitFor(() => expect(screen.getByText(/Paiements \(/)).toBeInTheDocument());
+  }
+
+  // ── Visibilité conditionnelle du bouton ──────────────────────────────────
+
+  it('le bouton "Valider la vente" est visible quand status === PENDING', async () => {
+    mockGet(makeSale()); // status: 'PENDING' par défaut
+    await openDetail();
+
+    expect(screen.getByText('Valider la vente')).toBeInTheDocument();
+  });
+
+  it('le bouton "Valider la vente" est absent quand status !== PENDING (ex. COMPLETED)', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    await openDetail();
+
+    expect(screen.queryByText('Valider la vente')).not.toBeInTheDocument();
+  });
+
+  // ── Validation réussie ────────────────────────────────────────────────────
+
+  it('validation réussie → toast de succès et badge de statut mis à jour (PATCH .../validate)', async () => {
+    let saleDetailCallCount = 0;
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments'))          return Promise.resolve([]);
+      if (path.includes('/sales?'))            return Promise.resolve(saleListResp);
+      if (path.includes('/sales/')) {
+        saleDetailCallCount += 1;
+        // Avant validation : PENDING. Après invalidation (refetch déclenché par le succès
+        // de la mutation, queryKey ['sale', id]) : COMPLETED — le badge doit suivre.
+        return Promise.resolve(
+          saleDetailCallCount === 1 ? makeSale() : { ...makeSale(), status: 'COMPLETED' },
+        );
+      }
+      return Promise.resolve(emptySales);
+    });
+    mockApi.patch.mockResolvedValue({ ...makeSale(), status: 'COMPLETED' });
+
+    await openDetail();
+
+    // Le libellé "En attente" apparaît deux fois avant validation : la ligne de liste
+    // (toujours montée derrière le Sheet) + le badge de la vue détail.
+    expect(screen.getAllByText('En attente').length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByText('Valider la vente'));
+
+    await waitFor(() =>
+      expect(screen.getByText('Vente validée. Stock mis à jour.')).toBeInTheDocument(),
+    );
+    expect(mockApi.patch).toHaveBeenCalledWith(`/sales/${SALE_ID}/validate`, {});
+    // Le badge de statut (un <span>, à distinguer de l'<option> "Terminée" du filtre de
+    // statuts toujours présent dans le DOM) reflète le COMPLETED renvoyé après invalidation/refetch.
+    await waitFor(() =>
+      expect(screen.getByText('Terminée', { selector: 'span' })).toBeInTheDocument(),
+    );
+  });
+
+  // ── Erreur serveur ────────────────────────────────────────────────────────
+
+  it('le serveur renvoie une erreur (ex. 409 conflit de concurrence) → toast d\'erreur, pas de crash', async () => {
+    mockGet(makeSale());
+    mockApi.patch.mockRejectedValue(new Error('Conflit de version sur le stock.'));
+
+    await openDetail();
+    await userEvent.click(screen.getByText('Valider la vente'));
+
+    await waitFor(() =>
+      expect(screen.getByText('Erreur lors de la validation.')).toBeInTheDocument(),
+    );
+    // Le statut reste PENDING, le bouton "Valider la vente" reste affiché et utilisable.
+    expect(screen.getByText('Valider la vente')).toBeInTheDocument();
+  });
+});

@@ -1,14 +1,22 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DocumentStatus, DocumentType, PaymentStatus, Prisma } from '@prisma/client';
+import { convertToBase } from '@ensemb/utils';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import {
+  ProductWarehouseService,
+  OptimisticLockException,
+} from '../inventory/product-warehouse.service';
+import { NotificationService } from '../notifications/notification.service';
 import type { CreateSaleDto, SaleDetailDto } from './dto/create-sale.dto';
 import type { UpdateSaleDto } from './dto/update-sale.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -134,13 +142,21 @@ const CLIENT_WAREHOUSE_INCLUDE = {
  *    lignes, qui ont taxMethod/discountMethod). La remise d'en-tête (discount) est
  *    toujours un montant XAF fixe soustrait du total, sans mode pourcentage — c'est la
  *    seule lecture cohérente avec les champs réellement exposés par CreateSaleDto.
+ *  - validate() (S21) est la SEULE action qui mouvemente le stock d'une vente classique :
+ *    décrément de ProductWarehouse via ProductWarehouseService.adjustStock (verrouillage
+ *    optimiste, transaction Serializable), conversion d'unité saleUnitId → unité de stock
+ *    du produit via convertToBase, indépendant de paymentStatus/PaymentSale (S20).
  */
 @Injectable()
 export class SaleService {
+  private readonly logger = new Logger(SaleService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly documentCounter: DocumentCounterService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly productWarehouseService: ProductWarehouseService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -211,6 +227,234 @@ export class SaleService {
     }
 
     return sale;
+  }
+
+  /**
+   * Valide une vente PENDING : décrémente le stock de l'entrepôt de la vente pour
+   * chaque ligne (regroupées par couple produit/variante, converties dans l'unité de
+   * stock du produit via convertToBase si saleUnitId diffère), puis fait passer le
+   * statut à COMPLETED — le tout dans une seule transaction Serializable.
+   *
+   * Indépendant de paymentStatus/PaymentSale (S20) : une vente peut être validée
+   * (stock mouvementé) sans être payée — le paiement suit son propre cycle asynchrone.
+   *
+   * La vente et ses lignes sont relues DANS la transaction Serializable pour éliminer
+   * le TOCTOU : deux requêtes concurrentes de validation sur la même vente ne peuvent
+   * pas toutes deux passer le contrôle PENDING et double-décrémenter le stock. Les
+   * lignes sont regroupées par (productId, productVariantId) et sommées AVANT tout
+   * appel à adjustStock — un seul mouvement cumulé par couple produit/variante, jamais
+   * un appel par ligne brute (sinon la 2e ligne du même produit utiliserait une version
+   * déjà obsolète après le premier adjustStock).
+   *
+   * @throws NotFoundException si la vente, un ProductWarehouse ou une unité de vente
+   *         référencée est introuvable.
+   * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
+   * @throws BadRequestException si la vente n'est pas PENDING, ou si le stock disponible
+   *         est insuffisant pour une ligne.
+   * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
+   */
+  async validate(id: string, organizationId: string): Promise<SaleResponse> {
+    type StockUpdate = {
+      productId: string;
+      newQuantity: Decimal;
+      productName: string;
+      stockAlert: number;
+    };
+
+    const stockUpdates: StockUpdate[] = [];
+    let capturedWarehouseId!: string;
+
+    await this.prisma
+      .$transaction(
+        async (tx) => {
+          // 1. Relire la vente + lignes DANS la transaction Serializable (élimine le TOCTOU).
+          const existing = await tx.sale.findUnique({
+            where: { id },
+            select: { ...SALE_SELECT, details: { select: DETAIL_SELECT } },
+          });
+
+          if (!existing || existing.deletedAt !== null) {
+            throw new NotFoundException('Vente introuvable.');
+          }
+          if (existing.organizationId !== organizationId) {
+            throw new ForbiddenException('Accès refusé.');
+          }
+          if (existing.status !== 'PENDING') {
+            throw new BadRequestException(
+              'Seule une vente en attente (PENDING) peut être validée.',
+            );
+          }
+
+          capturedWarehouseId = existing.warehouseId;
+
+          // 2. Charger l'unité de stock de chaque produit référencé (pour savoir si une
+          //    conversion est nécessaire entre l'unité de vente et l'unité de stock).
+          const productIds = [...new Set(existing.details.map((d) => d.productId))];
+          const products = await tx.product.findMany({
+            where: { id: { in: productIds } },
+            select: { id: true, unitId: true },
+          });
+          const productUnitMap = new Map(products.map((p) => [p.id, p.unitId]));
+
+          // 3. Charger les Unit référencées par saleUnitId (operator/operatorValue pour convertToBase).
+          const saleUnitIds = [
+            ...new Set(
+              existing.details
+                .filter((d) => d.saleUnitId)
+                .map((d) => d.saleUnitId as string),
+            ),
+          ];
+          const units =
+            saleUnitIds.length > 0
+              ? await tx.unit.findMany({
+                  where: { id: { in: saleUnitIds } },
+                  select: { id: true, operator: true, operatorValue: true },
+                })
+              : [];
+          const unitMap = new Map(units.map((u) => [u.id, u]));
+
+          // 4. Regrouper par (productId, productVariantId) avec conversion AVANT sommation —
+          //    un seul mouvement de stock cumulé par couple produit/variante.
+          const grouped = new Map<
+            string,
+            { productId: string; productVariantId: string | null; quantity: Decimal }
+          >();
+          for (const detail of existing.details) {
+            const productUnitId = productUnitMap.get(detail.productId) ?? null;
+            let qty = new Decimal(detail.quantity);
+            if (detail.saleUnitId && detail.saleUnitId !== productUnitId) {
+              const unit = unitMap.get(detail.saleUnitId);
+              // Défensif : ne devrait jamais être null (ownership de saleUnitId déjà
+              // vérifiée à la création de la vente, S19) — NotFoundException plutôt
+              // qu'un crash TypeScript.
+              if (!unit) {
+                throw new NotFoundException('Unité de vente introuvable.');
+              }
+              qty = convertToBase(qty, unit);
+            }
+            const key = `${detail.productId}::${detail.productVariantId ?? ''}`;
+            const g = grouped.get(key);
+            if (g) {
+              g.quantity = g.quantity.plus(qty);
+            } else {
+              grouped.set(key, {
+                productId: detail.productId,
+                productVariantId: detail.productVariantId,
+                quantity: qty,
+              });
+            }
+          }
+
+          // 5. Pour chaque groupe : garde stock insuffisant AVANT adjustStock, puis décrément.
+          for (const group of grouped.values()) {
+            // Filtre product: { organizationId } : protège contre l'IDOR sur productVariantId
+            // (patron identique à StockTransferService.validate).
+            const pw = await tx.productWarehouse.findFirst({
+              where: {
+                productId: group.productId,
+                warehouseId: existing.warehouseId,
+                productVariantId: group.productVariantId ?? null,
+                product: { organizationId },
+              },
+              select: {
+                id: true,
+                version: true,
+                quantity: true,
+                product: { select: { stockAlert: true, name: true } },
+              },
+            });
+
+            if (!pw) {
+              throw new NotFoundException(
+                "Stock introuvable dans l'entrepôt de la vente. " +
+                  'Initialisez le stock avant de valider.',
+              );
+            }
+
+            if (group.quantity.greaterThan(pw.quantity)) {
+              throw new BadRequestException(
+                `Stock insuffisant pour ${pw.product.name} : ` +
+                  `disponible ${pw.quantity.toFixed(3)}, demandé ${group.quantity.toFixed(3)}.`,
+              );
+            }
+
+            const updated = await this.productWarehouseService.adjustStock(
+              tx,
+              pw.id,
+              organizationId,
+              group.quantity.negated(),
+              pw.version,
+            );
+
+            stockUpdates.push({
+              productId: group.productId,
+              newQuantity: updated.quantity,
+              productName: pw.product.name,
+              stockAlert: pw.product.stockAlert,
+            });
+          }
+
+          // 6. Statut
+          await tx.sale.update({ where: { id }, data: { status: 'COMPLETED' } });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((err: unknown) => {
+        if (err instanceof OptimisticLockException) {
+          throw new ConflictException(
+            'Conflit de version sur le stock : un autre utilisateur a modifié le stock simultanément. Veuillez réessayer.',
+          );
+        }
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+          throw new ConflictException('Conflit de concurrence détecté. Veuillez réessayer.');
+        }
+        throw err;
+      });
+
+    // Après la transaction réussie : stock:updated — un événement, un seul entrepôt
+    // pour une vente (contrairement au transfert qui en émet deux).
+    this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:updated', {
+      warehouseId: capturedWarehouseId,
+      products: stockUpdates.map((u) => ({ productId: u.productId, newQuantity: u.newQuantity })),
+    });
+
+    // stock:lowAlert + notification persistée si la quantité après décrémentation atteint
+    // le seuil — patron identique à StockTransferService.validate.
+    for (const update of stockUpdates) {
+      if (
+        update.stockAlert > 0 &&
+        update.newQuantity.lessThanOrEqualTo(new Decimal(update.stockAlert))
+      ) {
+        this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:lowAlert', {
+          productId: update.productId,
+          productName: update.productName,
+          currentQuantity: update.newQuantity,
+          threshold: update.stockAlert,
+        });
+        // Persiste l'alerte pour les utilisateurs hors-ligne (§17 point I — S18)
+        this.notificationService
+          .createForOrg(
+            organizationId,
+            'stock.lowAlert',
+            {
+              productId: update.productId,
+              productName: update.productName,
+              currentQuantity: update.newQuantity.toString(),
+              threshold: update.stockAlert,
+              warehouseId: capturedWarehouseId,
+            },
+            'reports.quantityAlerts',
+          )
+          .catch((err: unknown) => {
+            this.logger.error('Erreur création notification stock.lowAlert (vente)', err);
+          });
+      }
+    }
+
+    return this.prisma.sale.findUniqueOrThrow({
+      where: { id },
+      select: { ...SALE_SELECT, ...CLIENT_WAREHOUSE_INCLUDE, details: { select: DETAIL_SELECT } },
+    });
   }
 
   /**

@@ -46,11 +46,12 @@ function parsePagination(page: unknown, limit: unknown) {
  * organizationId est toujours extrait de req.user — jamais de l'URL (anti-IDOR).
  *
  * Routes :
- *   GET    /api/v1/sales      → liste paginée (records.viewAll via ViewAllInterceptor)
- *   POST   /api/v1/sales      → 201 (statut PENDING)
- *   GET    /api/v1/sales/:id  → détail avec lignes, client, entrepôt
- *   PATCH  /api/v1/sales/:id  → 200 (PENDING uniquement)
- *   DELETE /api/v1/sales/:id  → 204 (PENDING uniquement)
+ *   GET    /api/v1/sales             → liste paginée (records.viewAll via ViewAllInterceptor)
+ *   POST   /api/v1/sales             → 201 (statut PENDING)
+ *   GET    /api/v1/sales/:id         → détail avec lignes, client, entrepôt
+ *   PATCH  /api/v1/sales/:id         → 200 (PENDING uniquement)
+ *   PATCH  /api/v1/sales/:id/validate → 200 (S21 — PENDING → COMPLETED, mouvemente le stock)
+ *   DELETE /api/v1/sales/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('sales')
@@ -148,6 +149,22 @@ export class SaleController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.saleService.update(id, req.user.organizationId, result.data);
+  }
+
+  /**
+   * PATCH /api/v1/sales/:id/validate
+   * Valide une vente PENDING (S21) : décrémente le stock de l'entrepôt de la vente
+   * (verrouillage optimiste, conversion d'unité) puis fait passer le statut à COMPLETED.
+   * Indépendant de paymentStatus/PaymentSale (S20).
+   */
+  @RequirePermission('sales.validate')
+  @Patch(':id/validate')
+  @Auditable({ action: 'sales.validate', entity: 'Sale' })
+  validate(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.saleService.validate(id, req.user.organizationId);
   }
 
   /**
