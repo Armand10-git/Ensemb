@@ -1,10 +1,12 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Decimal } from '@prisma/client/runtime/library';
 import { SaleService } from '../sale.service';
 import { PrismaService } from '../../../common/prisma.service';
 import { DocumentCounterService } from '../../../common/document-counter.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { ProductWarehouseService, OptimisticLockException } from '../../inventory/product-warehouse.service';
+import { NotificationService } from '../../notifications/notification.service';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -16,6 +18,9 @@ const CLIENT_ID = 'client01-0000-0000-0000-000000000001';
 const WH_ID     = 'wh000001-0000-0000-0000-000000000001';
 const PROD_ID   = 'prod0000-0000-0000-0000-000000000001';
 const SALE_ID   = 'sale0001-0000-0000-0000-000000000001';
+const PW_ID     = 'pw000001-0000-0000-0000-000000000001';
+const UNIT_PIECE  = 'unit0001-0000-0000-0000-000000000001';
+const UNIT_CARTON = 'unit0002-0000-0000-0000-000000000002';
 const REF       = 'VTE-2026-000001';
 
 function makeSale(overrides: Partial<{
@@ -80,9 +85,11 @@ describe('SaleService', () => {
     product: { findMany: jest.Mock };
     productVariant: { findMany: jest.Mock };
     unit: { findMany: jest.Mock };
+    productWarehouse: { findFirst: jest.Mock };
     sale: {
       create: jest.Mock;
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       update: jest.Mock;
@@ -92,6 +99,8 @@ describe('SaleService', () => {
   };
 
   let documentCounter: { nextReference: jest.Mock };
+  let productWarehouseService: { adjustStock: jest.Mock };
+  let notificationService: { createForOrg: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -101,9 +110,11 @@ describe('SaleService', () => {
       product: { findMany: jest.fn() },
       productVariant: { findMany: jest.fn() },
       unit: { findMany: jest.fn() },
+      productWarehouse: { findFirst: jest.fn() },
       sale: {
         create: jest.fn(),
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
         update: jest.fn(),
@@ -119,8 +130,10 @@ describe('SaleService', () => {
       return Promise.all(arg as Promise<unknown>[]);
     });
 
-    const dcMock = { nextReference: jest.fn().mockResolvedValue(REF) };
-    const rtMock = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
+    const dcMock    = { nextReference: jest.fn().mockResolvedValue(REF) };
+    const rtMock    = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
+    const pwMock    = { adjustStock: jest.fn() };
+    const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -128,12 +141,16 @@ describe('SaleService', () => {
         { provide: PrismaService, useValue: prismaMock },
         { provide: DocumentCounterService, useValue: dcMock },
         { provide: RealtimeGateway, useValue: rtMock },
+        { provide: ProductWarehouseService, useValue: pwMock },
+        { provide: NotificationService, useValue: notifMock },
       ],
     }).compile();
 
     service = module.get(SaleService);
     prisma = prismaMock;
     documentCounter = dcMock;
+    productWarehouseService = pwMock;
+    notificationService = notifMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -312,5 +329,200 @@ describe('SaleService', () => {
         data: expect.objectContaining({ deletedAt: expect.any(Date) }),
       }),
     );
+  });
+
+  // ─── validate (S21) ──────────────────────────────────────────────────────
+
+  describe('validate', () => {
+    /** Construit une vente PENDING avec des lignes personnalisées pour les tests de validate(). */
+    function makeValidateSale(details: Record<string, unknown>[]) {
+      return makeSale({ status: 'PENDING', details });
+    }
+
+    function mockValidateHappyPath(opts: {
+      pwQuantity: string;
+      newQuantity: string;
+      stockAlert?: number;
+      productName?: string;
+    }) {
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal(opts.pwQuantity),
+        product: { stockAlert: opts.stockAlert ?? 0, name: opts.productName ?? 'Produit' },
+      });
+      productWarehouseService.adjustStock.mockResolvedValue({
+        id: PW_ID,
+        productId: PROD_ID,
+        productVariantId: null,
+        warehouseId: WH_ID,
+        quantity: new Decimal(opts.newQuantity),
+        version: 1,
+      });
+      prisma.sale.update.mockResolvedValue({});
+      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeSale({ status: 'COMPLETED' }));
+    }
+
+    it('décrémente correctement le stock d\'une ligne simple', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('3') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockValidateHappyPath({ pwQuantity: '10', newQuantity: '7' });
+
+      const result = await service.validate(SALE_ID, ORG_A);
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      const [, pwId, org, delta, version] = productWarehouseService.adjustStock.mock.calls[0] as [
+        unknown, string, string, Decimal, number,
+      ];
+      expect(pwId).toBe(PW_ID);
+      expect(org).toBe(ORG_A);
+      expect(delta.toString()).toBe('-3');
+      expect(version).toBe(0);
+      expect(prisma.sale.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: SALE_ID }, data: { status: 'COMPLETED' } }),
+      );
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('convertit la quantité via saleUnitId (2 cartons × 12 = 24 pièces décrémentées)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: UNIT_CARTON, quantity: new Decimal('2') },
+        ]),
+      );
+      // Le produit est stocké en pièces — l'unité de vente (carton) diffère → conversion.
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([
+        { id: UNIT_CARTON, operator: '*', operatorValue: new Decimal('12') },
+      ]);
+      mockValidateHappyPath({ pwQuantity: '100', newQuantity: '76' });
+
+      await service.validate(SALE_ID, ORG_A);
+
+      const [, , , delta] = productWarehouseService.adjustStock.mock.calls[0] as [unknown, unknown, unknown, Decimal];
+      // 2 cartons × 12 = 24 pièces → décrément de 24
+      expect(delta.toString()).toBe('-24');
+    });
+
+    it('deux lignes du même produit → un seul appel à adjustStock avec la quantité cumulée', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+          { id: 'det2', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('3') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockValidateHappyPath({ pwQuantity: '20', newQuantity: '15' });
+
+      await service.validate(SALE_ID, ORG_A);
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      const [, , , delta] = productWarehouseService.adjustStock.mock.calls[0] as [unknown, unknown, unknown, Decimal];
+      // 2 + 3 = 5 cumulé, un seul mouvement de -5 — jamais deux appels de -2 puis -3.
+      expect(delta.toString()).toBe('-5');
+    });
+
+    it('quantité demandée > stock disponible → BadRequestException, adjustStock jamais appelé', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('5') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal('1'),
+        product: { stockAlert: 0, name: 'Produit' },
+      });
+
+      await expect(service.validate(SALE_ID, ORG_A)).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('statut déjà COMPLETED → BadRequestException (pas de revalidation)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeValidateSale([]));
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'COMPLETED' }));
+
+      await expect(service.validate(SALE_ID, ORG_A)).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it("vente d'une autre organisation → ForbiddenException", async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ organizationId: ORG_B, status: 'PENDING' }));
+
+      await expect(service.validate(SALE_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('émet stock:lowAlert + NotificationService.createForOrg si le seuil est atteint après décrément', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('7') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      // Stock 10 − 7 = 3, seuil d'alerte 5 → 3 ≤ 5 → alerte
+      mockValidateHappyPath({ pwQuantity: '10', newQuantity: '3', stockAlert: 5, productName: 'Produit X' });
+
+      await service.validate(SALE_ID, ORG_A);
+
+      expect(toEmit).toHaveBeenCalledWith(
+        'stock:lowAlert',
+        expect.objectContaining({ productId: PROD_ID, threshold: 5 }),
+      );
+      expect(notificationService.createForOrg).toHaveBeenCalledWith(
+        ORG_A,
+        'stock.lowAlert',
+        expect.objectContaining({ productId: PROD_ID, productName: 'Produit X' }),
+        'reports.quantityAlerts',
+      );
+    });
+
+    it("n'émet pas stock:lowAlert si le stock restant est au-dessus du seuil", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      // Stock 10 − 2 = 8, seuil d'alerte 5 → 8 > 5 → pas d'alerte
+      mockValidateHappyPath({ pwQuantity: '10', newQuantity: '8', stockAlert: 5 });
+
+      await service.validate(SALE_ID, ORG_A);
+
+      expect(toEmit).not.toHaveBeenCalledWith('stock:lowAlert', expect.anything());
+      expect(notificationService.createForOrg).not.toHaveBeenCalled();
+      // stock:updated reste émis dans tous les cas.
+      expect(toEmit).toHaveBeenCalledWith('stock:updated', expect.anything());
+    });
+
+    it('lève ConflictException si adjustStock lève OptimisticLockException (conflit de version)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeValidateSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('1') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal('10'),
+        product: { stockAlert: 0, name: 'Produit' },
+      });
+      productWarehouseService.adjustStock.mockRejectedValue(new OptimisticLockException(PW_ID, 0, 1));
+
+      await expect(service.validate(SALE_ID, ORG_A)).rejects.toThrow(ConflictException);
+    });
   });
 });

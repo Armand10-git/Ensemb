@@ -81,6 +81,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Ventes
   { name: 'sales.view', label: 'Voir les ventes' },
   { name: 'sales.create', label: 'Créer une vente' },
+  { name: 'sales.validate', label: 'Valider une vente (mouvemente le stock)' },
   { name: 'sales.edit', label: 'Modifier une vente' },
   { name: 'sales.delete', label: 'Supprimer une vente' },
   { name: 'sales.cancel', label: 'Annuler une vente' },

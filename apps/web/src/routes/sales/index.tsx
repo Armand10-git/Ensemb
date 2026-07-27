@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -101,6 +102,9 @@ interface DetailFormRow {
   taxAmount: string;
 }
 
+const VITE_API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
+const WS_URL = VITE_API_URL.replace('/api/v1', '');
+
 // ─── API Hooks ───────────────────────────────────────────────────────────────
 
 function useSales(
@@ -167,6 +171,21 @@ function useDeleteSale() {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/sales/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['sales'] }); },
+  });
+}
+
+/**
+ * Valide une vente (PENDING → COMPLETED) : le stock est décrémenté côté serveur.
+ * Invalide la liste des ventes et le détail de la vente concernée (badge de statut).
+ */
+function useValidateSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.patch<Sale>(`/sales/${id}/validate`, {}),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['sales'] });
+      void qc.invalidateQueries({ queryKey: ['sale', data.id] });
+    },
   });
 }
 
@@ -546,11 +565,15 @@ function PaymentForm({
 function SaleDetailView({
   sale,
   products,
+  onValidate,
   onDelete,
+  validating,
 }: {
   sale: Sale;
   products: ProductRef[];
+  onValidate: () => void;
   onDelete: () => void;
+  validating: boolean;
 }) {
   const qc = useQueryClient();
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
@@ -702,10 +725,16 @@ function SaleDetailView({
       </div>
 
       {sale.status === 'PENDING' && (
-        <Button variant="destructive" onClick={onDelete}>
-          <Trash2 className="h-4 w-4" />
-          Supprimer
-        </Button>
+        <div className="flex gap-2.5 pt-1">
+          <Button className="flex-1" onClick={onValidate} loading={validating}>
+            {!validating && 'Valider la vente'}
+            {validating && 'Validation…'}
+          </Button>
+          <Button variant="destructive" onClick={onDelete} disabled={validating}>
+            <Trash2 className="h-4 w-4" />
+            Supprimer
+          </Button>
+        </div>
       )}
 
       {/* ── Sheet ajout de paiement ─────────────────────────────────────── */}
@@ -753,8 +782,23 @@ export default function SalesPage() {
   const warehouses = warehouseData?.data ?? [];
   const products   = productData?.data ?? [];
 
-  const createMutation = useCreateSale();
-  const deleteMutation  = useDeleteSale();
+  const createMutation   = useCreateSale();
+  const deleteMutation   = useDeleteSale();
+  const validateMutation = useValidateSale();
+
+  // Socket.io — invalider le cache sur stock:updated (la validation d'une vente décrémente le stock)
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') ?? '';
+    const socket: Socket = io(WS_URL + '/realtime', {
+      auth: { token },
+      transports: ['websocket'],
+    });
+    socket.on('stock:updated', () => {
+      void qc.invalidateQueries({ queryKey: ['sales'] });
+      void qc.invalidateQueries({ queryKey: ['sale', detailId] });
+    });
+    return () => { socket.disconnect(); };
+  }, [qc, detailId]);
 
   async function handleSave(payload: unknown) {
     try {
@@ -774,6 +818,15 @@ export default function SalesPage() {
       toast.success('Vente supprimée.');
     } catch {
       toast.error('Erreur lors de la suppression.');
+    }
+  }
+
+  async function handleValidate(id: string) {
+    try {
+      await validateMutation.mutateAsync(id);
+      toast.success('Vente validée. Stock mis à jour.');
+    } catch {
+      toast.error('Erreur lors de la validation.');
     }
   }
 
@@ -957,7 +1010,9 @@ export default function SalesPage() {
               <SaleDetailView
                 sale={detail}
                 products={products}
+                onValidate={() => void handleValidate(detail.id)}
                 onDelete={() => setDeleteTarget({ id: detail.id, reference: detail.reference })}
+                validating={validateMutation.isPending}
               />
             )}
           </div>

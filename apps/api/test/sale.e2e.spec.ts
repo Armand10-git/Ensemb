@@ -8,6 +8,10 @@
  *  - PATCH /sales/:id — lignes recalculées, uniquement si PENDING
  *  - DELETE /sales/:id — 204 si PENDING ; 400 si COMPLETED
  *  - records.viewAll : sans la permission, un utilisateur ne voit que ses propres ventes
+ *  - PATCH /sales/:id/validate (S21) — décrémente ProductWarehouse.quantity, PENDING → COMPLETED,
+ *    stock insuffisant, isolation tenant, non-régression update()/remove() post-validation, et
+ *    surtout le test de concurrence critère « Fait quand » du plan : deux validations simultanées
+ *    sur le dernier exemplaire d'un produit → une seule réussit, stock jamais négatif.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -17,6 +21,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
+import { Decimal } from '@prisma/client/runtime/library';
 import { getTestPrisma } from './helpers/prisma';
 import bcrypt from 'bcryptjs';
 import { PrismaModule } from '../src/common/prisma.module';
@@ -45,8 +50,9 @@ let tokenB: string;
 let clientAId: string;
 let warehouseAId: string;
 let productAId: string;
+let pwValId: string; // ProductWarehouse dédié aux tests de validate() (productAId @ warehouseAId)
 
-const PERMS = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete', 'records.viewAll'];
+const PERMS = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete', 'sales.validate', 'records.viewAll'];
 const PERMS_NO_VIEWALL = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete'];
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
@@ -119,6 +125,12 @@ beforeAll(async () => {
   });
   clientAId = clientA.id;
 
+  // Stock initial pour les tests validate() (S21) — remis à l'état voulu au début de chaque test.
+  const pwVal = await prisma.productWarehouse.create({
+    data: { productId: productAId, warehouseId: warehouseAId, quantity: new Decimal('100'), version: 0 },
+  });
+  pwValId = pwVal.id;
+
   const moduleRef: TestingModule = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
@@ -160,6 +172,7 @@ afterAll(async () => {
   await prisma.saleDetail.deleteMany({ where: { sale: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.sale.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.client.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
+  await prisma.productWarehouse.deleteMany({ where: { productId: productAId } });
   await prisma.product.deleteMany({ where: { organizationId: orgAId } });
   await prisma.category.deleteMany({ where: { organizationId: orgAId } });
   await prisma.warehouse.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
@@ -341,6 +354,160 @@ describe('PATCH /api/v1/sales/:id', () => {
     const res = await asA('patch', `/api/v1/sales/${created.body.id}`).send({ notes: 'x' });
 
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── PATCH /sales/:id/validate (S21) ──────────────────────────────────────────
+// Mouvemente le stock (ProductWarehouse.quantity, verrouillage optimiste, transaction
+// Serializable) puis fait passer le statut PENDING → COMPLETED. Chaque test remet le
+// stock partagé (pwValId) à l'état voulu avant de créer sa propre vente, à l'identique
+// du patron transfer.e2e.spec.ts.
+
+describe('PATCH /api/v1/sales/:id/validate', () => {
+  it('200 — décrémente ProductWarehouse.quantity et passe status à COMPLETED', async () => {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal('100'), version: 0 },
+    });
+
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '4' }],
+    });
+    const saleId = created.body.id as string;
+
+    const res = await asA('patch', `/api/v1/sales/${saleId}/validate`).send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('COMPLETED');
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('96');
+
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('COMPLETED');
+  });
+
+  it('400 — stock insuffisant : quantité en base et statut PENDING inchangés', async () => {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal('2'), version: 0 },
+    });
+
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '5' }],
+    });
+    const saleId = created.body.id as string;
+
+    const res = await asA('patch', `/api/v1/sales/${saleId}/validate`).send();
+
+    expect(res.status).toBe(400);
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('2');
+
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('PENDING');
+  });
+
+  it(
+    'concurrence — deux ventes simultanées sur le dernier exemplaire : exactement une 200 ' +
+      'et une 409, stock final = 0 (jamais négatif, jamais 1)',
+    async () => {
+      await prisma.productWarehouse.update({
+        where: { id: pwValId },
+        data: { quantity: new Decimal('1'), version: 0 },
+      });
+
+      const sale1 = await asA('post', '/api/v1/sales').send({
+        clientId: clientAId,
+        warehouseId: warehouseAId,
+        date: '2026-07-26T00:00:00.000Z',
+        details: [{ productId: productAId, price: '1000', quantity: '1' }],
+      });
+      const sale2 = await asA('post', '/api/v1/sales').send({
+        clientId: clientAId,
+        warehouseId: warehouseAId,
+        date: '2026-07-26T00:00:00.000Z',
+        details: [{ productId: productAId, price: '1000', quantity: '1' }],
+      });
+
+      // Lancées réellement en parallèle contre une vraie base Postgres — c'est la
+      // sérialisation Postgres (isolationLevel Serializable + verrouillage optimiste
+      // adjustStock) qui doit arbitrer, pas un mock.
+      const [res1, res2] = await Promise.all([
+        asA('patch', `/api/v1/sales/${sale1.body.id as string}/validate`).send(),
+        asA('patch', `/api/v1/sales/${sale2.body.id as string}/validate`).send(),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 409]);
+
+      const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+      expect(new Decimal(pw!.quantity).toString()).toBe('0');
+
+      // La vente gagnante est COMPLETED, la perdante reste PENDING (aucun double mouvement).
+      const [reload1, reload2] = await Promise.all([
+        prisma.sale.findUnique({ where: { id: sale1.body.id as string } }),
+        prisma.sale.findUnique({ where: { id: sale2.body.id as string } }),
+      ]);
+      const finalStatuses = [reload1!.status, reload2!.status].sort();
+      expect(finalStatuses).toEqual(['COMPLETED', 'PENDING']);
+    },
+  );
+
+  it('403 — isolation tenant : org B ne peut pas valider une vente de org A', async () => {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal('50'), version: 0 },
+    });
+
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    const saleId = created.body.id as string;
+
+    const res = await asB('patch', `/api/v1/sales/${saleId}/validate`).send();
+
+    expect(res.status).toBe(403);
+
+    // Le stock et le statut de org A restent inchangés — l'échec de org B n'a aucun effet.
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('50');
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('PENDING');
+  });
+
+  it('non-régression — update()/remove() sur une vente COMPLETED via validate() → toujours 400', async () => {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal('50'), version: 0 },
+    });
+
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    const saleId = created.body.id as string;
+
+    const validateRes = await asA('patch', `/api/v1/sales/${saleId}/validate`).send();
+    expect(validateRes.status).toBe(200);
+
+    const updateRes = await asA('patch', `/api/v1/sales/${saleId}`).send({ notes: 'x' });
+    expect(updateRes.status).toBe(400);
+
+    const deleteRes = await asA('delete', `/api/v1/sales/${saleId}`);
+    expect(deleteRes.status).toBe(400);
   });
 });
 
