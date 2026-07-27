@@ -72,7 +72,7 @@ export function CurrenciesPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       <PageHeader
         title="Devises"
         description="Devises disponibles pour l'organisation — gérées par l'administrateur de la plateforme."

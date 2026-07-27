@@ -401,7 +401,7 @@ function ProductForm({
       className="flex flex-1 flex-col gap-5 px-6 py-6"
     >
       {/* Code + Type code-barres */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="p-code">Code *</Label>
           <Input
@@ -448,7 +448,7 @@ function ProductForm({
       </div>
 
       {/* Prix */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="p-cost">Prix d'achat (XAF) *</Label>
           <Input
@@ -476,7 +476,7 @@ function ProductForm({
       </div>
 
       {/* TVA */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="p-taxrate">Taux TVA</Label>
           <Input
@@ -502,7 +502,7 @@ function ProductForm({
       </div>
 
       {/* Catégorie + Marque */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="p-cat">Catégorie *</Label>
           <NativeSelect
@@ -739,7 +739,7 @@ export function ProductsPage() {
   const rows = data?.data ?? [];
 
   return (
-    <div className="mx-auto max-w-6xl p-8">
+    <div className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
       {/* Hidden file input pour upload image */}
       <input
         ref={fileInputRef}
@@ -762,7 +762,7 @@ export function ProductsPage() {
 
       {/* ── Filtres ──────────────────────────────────────────────────────── */}
       {!isLoading && !isError && (
-        <div className="mb-4 flex gap-2.5">
+        <div className="mb-4 flex flex-wrap gap-2.5">
           <Input
             type="search"
             placeholder="Rechercher par code ou nom…"
