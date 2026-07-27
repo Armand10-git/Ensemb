@@ -149,6 +149,9 @@ model WebhookEvent {
   organizationId  String?   @db.Uuid
   invoiceId       String?   @db.Uuid
   invoice         Invoice?  @relation(fields: [invoiceId], references: [id])
+  /// Vente POS concernée — résolu depuis le payload de l'agrégateur (S22, parallèle à invoiceId)
+  saleId          String?   @db.Uuid
+  sale            Sale?     @relation(fields: [saleId], references: [id])
 
   @@unique([provider, providerEventId])
   @@map("webhook_events")
@@ -285,6 +288,7 @@ model User {
   transfers     StockTransfer[]
   notifications Notification[]
   sales         Sale[]
+  cancelledSales Sale[]        @relation("SaleCancelledBy")
   paymentSales  PaymentSale[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
@@ -875,6 +879,11 @@ model Sale {
   paymentStatus  PaymentStatus  @default(UNPAID)
   status         DocumentStatus @default(PENDING)
   notes          String?
+  /// Raison obligatoire de l'annulation (S21b, §18.18) — renseignée uniquement si status = CANCELLED
+  cancelReason   String?
+  cancelledAt    DateTime?
+  /// Acteur de l'annulation — null si annulée par le job d'expiration mobile money (§17 point V, S22)
+  cancelledById  String?        @db.Uuid
   deletedAt      DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -883,8 +892,10 @@ model Sale {
   client       Client        @relation(fields: [clientId], references: [id])
   warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
   user         User          @relation(fields: [userId], references: [id])
+  cancelledBy  User?         @relation("SaleCancelledBy", fields: [cancelledById], references: [id])
   details      SaleDetail[]
   payments     PaymentSale[]
+  webhookEvents WebhookEvent[]
 
   @@unique([organizationId, reference])
   @@index([organizationId, status])

@@ -401,3 +401,85 @@ describe('SalesPage — Validation (S21)', () => {
     expect(screen.getByText('Valider la vente')).toBeInTheDocument();
   });
 });
+
+// ─── Annulation de vente (S21b, §18.18) ──────────────────────────────────────────
+
+describe('SalesPage — Annulation (S21b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockGet(saleDetail: ReturnType<typeof makeSale>) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments'))          return Promise.resolve([]);
+      if (path.includes('/sales?'))            return Promise.resolve(saleListResp);
+      if (path.includes('/sales/'))            return Promise.resolve(saleDetail);
+      return Promise.resolve(emptySales);
+    });
+  }
+
+  async function openDetail() {
+    renderPage();
+    await waitFor(() => screen.getByText('VTE-2026-000001'));
+    await userEvent.click(screen.getByText('VTE-2026-000001'));
+    await waitFor(() => expect(screen.getByText(/Paiements \(/)).toBeInTheDocument());
+  }
+
+  it('le bouton "Annuler la vente" est visible uniquement quand status === COMPLETED', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    await openDetail();
+
+    expect(screen.getByText('Annuler la vente')).toBeInTheDocument();
+  });
+
+  it('le bouton "Annuler la vente" est absent quand status === PENDING', async () => {
+    mockGet(makeSale());
+    await openDetail();
+
+    expect(screen.queryByText('Annuler la vente')).not.toBeInTheDocument();
+  });
+
+  it("le bouton de confirmation reste désactivé tant qu'aucune raison n'est saisie", async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    await openDetail();
+
+    await userEvent.click(screen.getByText('Annuler la vente'));
+    await waitFor(() => screen.getByText(/Annuler la vente VTE-2026-000001/));
+
+    expect(screen.getByText("Confirmer l'annulation")).toBeDisabled();
+  });
+
+  it('annulation réussie → toast de succès, PATCH .../cancel avec la raison saisie', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    mockApi.patch.mockResolvedValue({ ...makeSale(), status: 'CANCELLED', cancelReason: 'Erreur de saisie' });
+
+    await openDetail();
+    await userEvent.click(screen.getByText('Annuler la vente'));
+    await waitFor(() => screen.getByText(/Annuler la vente VTE-2026-000001/));
+
+    await userEvent.type(screen.getByPlaceholderText(/erreur de saisie/i), 'Erreur de saisie');
+    await userEvent.click(screen.getByText("Confirmer l'annulation"));
+
+    await waitFor(() => expect(screen.getByText('Vente annulée. Stock restitué.')).toBeInTheDocument());
+    expect(mockApi.patch).toHaveBeenCalledWith(`/sales/${SALE_ID}/cancel`, { reason: 'Erreur de saisie' });
+  });
+
+  it('le serveur renvoie une erreur → toast d\'erreur, pas de crash', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    mockApi.patch.mockRejectedValue(new Error('Seule une vente validée (COMPLETED) peut être annulée.'));
+
+    await openDetail();
+    await userEvent.click(screen.getByText('Annuler la vente'));
+    await waitFor(() => screen.getByText(/Annuler la vente VTE-2026-000001/));
+
+    await userEvent.type(screen.getByPlaceholderText(/erreur de saisie/i), 'Test');
+    await userEvent.click(screen.getByText("Confirmer l'annulation"));
+
+    await waitFor(() => expect(screen.getByText("Erreur lors de l'annulation.")).toBeInTheDocument());
+    // Le bouton "Annuler la vente" reste affiché et utilisable (statut inchangé côté serveur mocké).
+    expect(screen.getByText('Annuler la vente')).toBeInTheDocument();
+  });
+});

@@ -25,6 +25,7 @@ import { ViewAllInterceptor, type ViewAllRequest } from '../../common/intercepto
 import { SaleService } from './sale.service';
 import { CreateSaleSchema } from './dto/create-sale.dto';
 import { UpdateSaleSchema } from './dto/update-sale.dto';
+import { CancelSaleSchema } from './dto/cancel-sale.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 const UUID_RE =
@@ -51,6 +52,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/sales/:id         → détail avec lignes, client, entrepôt
  *   PATCH  /api/v1/sales/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/sales/:id/validate → 200 (S21 — PENDING → COMPLETED, mouvemente le stock)
+ *   PATCH  /api/v1/sales/:id/cancel  → 200 (S21b — COMPLETED → CANCELLED, restitue le stock)
  *   DELETE /api/v1/sales/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -165,6 +167,30 @@ export class SaleController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.saleService.validate(id, req.user.organizationId);
+  }
+
+  /**
+   * PATCH /api/v1/sales/:id/cancel
+   * Annule une vente COMPLETED (S21b, §18.18) : restitue le stock décrémenté par validate()
+   * sous verrouillage optimiste, fait passer le statut à CANCELLED. Raison obligatoire
+   * (min 3 caractères) — action irréversible.
+   */
+  @RequirePermission('sales.cancel')
+  @Patch(':id/cancel')
+  @Auditable({ action: 'sales.cancel', entity: 'Sale' })
+  cancel(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ) {
+    const result = CancelSaleSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.saleService.cancel(id, req.user.organizationId, {
+      reason: result.data.reason,
+      actorId: req.user.id,
+    });
   }
 
   /**

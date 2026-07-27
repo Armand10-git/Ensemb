@@ -26,6 +26,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { NotificationModule } from './modules/notifications/notification.module';
 import { SalesModule } from './modules/sales/sale.module';
+import { PosModule } from './modules/pos/pos.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { SalesModule } from './modules/sales/sale.module';
     InventoryModule,
     NotificationModule,
     SalesModule,
+    PosModule,
   ],
 })
 export class AppModule {}

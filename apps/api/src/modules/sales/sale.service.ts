@@ -55,12 +55,23 @@ export interface SaleResponse {
   paymentStatus: PaymentStatus;
   status: DocumentStatus;
   notes: string | null;
+  cancelReason: string | null;
+  cancelledAt: Date | null;
+  cancelledById: string | null;
   deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   client?: { id: string; name: string };
   warehouse?: { id: string; name: string };
   details?: SaleDetailResponse[];
+}
+
+/** Résultat d'un mouvement de stock appliqué par validate()/cancel() — pour stock:updated/lowAlert. */
+interface StockUpdate {
+  productId: string;
+  newQuantity: Decimal;
+  productName: string;
+  stockAlert: number;
 }
 
 /** Ligne de vente après calcul serveur — jamais confiance dans un total client (§17 point A). */
@@ -97,6 +108,9 @@ const SALE_SELECT = {
   paymentStatus: true,
   status: true,
   notes: true,
+  cancelReason: true,
+  cancelledAt: true,
+  cancelledById: true,
   deletedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -142,10 +156,14 @@ const CLIENT_WAREHOUSE_INCLUDE = {
  *    lignes, qui ont taxMethod/discountMethod). La remise d'en-tête (discount) est
  *    toujours un montant XAF fixe soustrait du total, sans mode pourcentage — c'est la
  *    seule lecture cohérente avec les champs réellement exposés par CreateSaleDto.
- *  - validate() (S21) est la SEULE action qui mouvemente le stock d'une vente classique :
- *    décrément de ProductWarehouse via ProductWarehouseService.adjustStock (verrouillage
- *    optimiste, transaction Serializable), conversion d'unité saleUnitId → unité de stock
- *    du produit via convertToBase, indépendant de paymentStatus/PaymentSale (S20).
+ *  - validate() (S21) et cancel() (S21b) sont les SEULES actions qui mouvementent le stock
+ *    d'une vente classique : décrément (validate) ou restitution (cancel) de ProductWarehouse
+ *    via ProductWarehouseService.adjustStock (verrouillage optimiste, transaction Serializable),
+ *    conversion d'unité saleUnitId → unité de stock du produit via convertToBase, indépendant
+ *    de paymentStatus/PaymentSale (S20). Regroupement/conversion et mouvement de stock sont
+ *    factorisés dans groupDetailsByProduct/moveStock, partagés par les deux méthodes.
+ *  - cancel() est réutilisable en interne (pas seulement via HTTP) : le job d'expiration
+ *    mobile money (S22, PosModule) l'appelle directement avec actorId: null.
  */
 @Injectable()
 export class SaleService {
@@ -254,14 +272,7 @@ export class SaleService {
    * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
    */
   async validate(id: string, organizationId: string): Promise<SaleResponse> {
-    type StockUpdate = {
-      productId: string;
-      newQuantity: Decimal;
-      productName: string;
-      stockAlert: number;
-    };
-
-    const stockUpdates: StockUpdate[] = [];
+    let stockUpdates: StockUpdate[] = [];
     let capturedWarehouseId!: string;
 
     await this.prisma
@@ -287,169 +298,112 @@ export class SaleService {
 
           capturedWarehouseId = existing.warehouseId;
 
-          // 2. Charger l'unité de stock de chaque produit référencé (pour savoir si une
-          //    conversion est nécessaire entre l'unité de vente et l'unité de stock).
-          const productIds = [...new Set(existing.details.map((d) => d.productId))];
-          const products = await tx.product.findMany({
-            where: { id: { in: productIds } },
-            select: { id: true, unitId: true },
-          });
-          const productUnitMap = new Map(products.map((p) => [p.id, p.unitId]));
+          // 2-4. Regroupement par (productId, productVariantId) avec conversion d'unité.
+          const grouped = await this.groupDetailsByProduct(tx, existing.details);
 
-          // 3. Charger les Unit référencées par saleUnitId (operator/operatorValue pour convertToBase).
-          const saleUnitIds = [
-            ...new Set(
-              existing.details
-                .filter((d) => d.saleUnitId)
-                .map((d) => d.saleUnitId as string),
-            ),
-          ];
-          const units =
-            saleUnitIds.length > 0
-              ? await tx.unit.findMany({
-                  where: { id: { in: saleUnitIds } },
-                  select: { id: true, operator: true, operatorValue: true },
-                })
-              : [];
-          const unitMap = new Map(units.map((u) => [u.id, u]));
-
-          // 4. Regrouper par (productId, productVariantId) avec conversion AVANT sommation —
-          //    un seul mouvement de stock cumulé par couple produit/variante.
-          const grouped = new Map<
-            string,
-            { productId: string; productVariantId: string | null; quantity: Decimal }
-          >();
-          for (const detail of existing.details) {
-            const productUnitId = productUnitMap.get(detail.productId) ?? null;
-            let qty = new Decimal(detail.quantity);
-            if (detail.saleUnitId && detail.saleUnitId !== productUnitId) {
-              const unit = unitMap.get(detail.saleUnitId);
-              // Défensif : ne devrait jamais être null (ownership de saleUnitId déjà
-              // vérifiée à la création de la vente, S19) — NotFoundException plutôt
-              // qu'un crash TypeScript.
-              if (!unit) {
-                throw new NotFoundException('Unité de vente introuvable.');
-              }
-              qty = convertToBase(qty, unit);
-            }
-            const key = `${detail.productId}::${detail.productVariantId ?? ''}`;
-            const g = grouped.get(key);
-            if (g) {
-              g.quantity = g.quantity.plus(qty);
-            } else {
-              grouped.set(key, {
-                productId: detail.productId,
-                productVariantId: detail.productVariantId,
-                quantity: qty,
-              });
-            }
-          }
-
-          // 5. Pour chaque groupe : garde stock insuffisant AVANT adjustStock, puis décrément.
-          for (const group of grouped.values()) {
-            // Filtre product: { organizationId } : protège contre l'IDOR sur productVariantId
-            // (patron identique à StockTransferService.validate).
-            const pw = await tx.productWarehouse.findFirst({
-              where: {
-                productId: group.productId,
-                warehouseId: existing.warehouseId,
-                productVariantId: group.productVariantId ?? null,
-                product: { organizationId },
-              },
-              select: {
-                id: true,
-                version: true,
-                quantity: true,
-                product: { select: { stockAlert: true, name: true } },
-              },
-            });
-
-            if (!pw) {
-              throw new NotFoundException(
-                "Stock introuvable dans l'entrepôt de la vente. " +
-                  'Initialisez le stock avant de valider.',
-              );
-            }
-
-            if (group.quantity.greaterThan(pw.quantity)) {
-              throw new BadRequestException(
-                `Stock insuffisant pour ${pw.product.name} : ` +
-                  `disponible ${pw.quantity.toFixed(3)}, demandé ${group.quantity.toFixed(3)}.`,
-              );
-            }
-
-            const updated = await this.productWarehouseService.adjustStock(
-              tx,
-              pw.id,
-              organizationId,
-              group.quantity.negated(),
-              pw.version,
-            );
-
-            stockUpdates.push({
-              productId: group.productId,
-              newQuantity: updated.quantity,
-              productName: pw.product.name,
-              stockAlert: pw.product.stockAlert,
-            });
-          }
+          // 5. Décrément (garde stock insuffisant AVANT adjustStock).
+          stockUpdates = await this.moveStock(
+            tx,
+            organizationId,
+            existing.warehouseId,
+            grouped,
+            'decrement',
+          );
 
           // 6. Statut
           await tx.sale.update({ where: { id }, data: { status: 'COMPLETED' } });
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       )
-      .catch((err: unknown) => {
-        if (err instanceof OptimisticLockException) {
-          throw new ConflictException(
-            'Conflit de version sur le stock : un autre utilisateur a modifié le stock simultanément. Veuillez réessayer.',
-          );
-        }
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
-          throw new ConflictException('Conflit de concurrence détecté. Veuillez réessayer.');
-        }
-        throw err;
-      });
+      .catch((err: unknown) => this.rethrowStockConflict(err));
 
-    // Après la transaction réussie : stock:updated — un événement, un seul entrepôt
-    // pour une vente (contrairement au transfert qui en émet deux).
-    this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:updated', {
-      warehouseId: capturedWarehouseId,
-      products: stockUpdates.map((u) => ({ productId: u.productId, newQuantity: u.newQuantity })),
+    this.emitStockEvents(organizationId, capturedWarehouseId, stockUpdates);
+
+    return this.prisma.sale.findUniqueOrThrow({
+      where: { id },
+      select: { ...SALE_SELECT, ...CLIENT_WAREHOUSE_INCLUDE, details: { select: DETAIL_SELECT } },
     });
+  }
 
-    // stock:lowAlert + notification persistée si la quantité après décrémentation atteint
-    // le seuil — patron identique à StockTransferService.validate.
-    for (const update of stockUpdates) {
-      if (
-        update.stockAlert > 0 &&
-        update.newQuantity.lessThanOrEqualTo(new Decimal(update.stockAlert))
-      ) {
-        this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:lowAlert', {
-          productId: update.productId,
-          productName: update.productName,
-          currentQuantity: update.newQuantity,
-          threshold: update.stockAlert,
-        });
-        // Persiste l'alerte pour les utilisateurs hors-ligne (§17 point I — S18)
-        this.notificationService
-          .createForOrg(
-            organizationId,
-            'stock.lowAlert',
-            {
-              productId: update.productId,
-              productName: update.productName,
-              currentQuantity: update.newQuantity.toString(),
-              threshold: update.stockAlert,
-              warehouseId: capturedWarehouseId,
-            },
-            'reports.quantityAlerts',
-          )
-          .catch((err: unknown) => {
-            this.logger.error('Erreur création notification stock.lowAlert (vente)', err);
+  /**
+   * Annule une vente dont le stock a déjà été mouvementé — COMPLETED (S21b, §18.18) ou
+   * AWAITING_PAYMENT (S22, expiration mobile money, §18.2 étape 10 : le stock est déjà
+   * décrémenté à la création POS, avant même la confirmation du paiement) : restitue le
+   * stock — même regroupement/conversion d'unité que validate(), delta positif — puis
+   * fait passer le statut à CANCELLED avec raison/horodatage/acteur. Le tout dans une
+   * seule transaction Serializable, vente et lignes relues DANS la transaction (même
+   * patron anti-TOCTOU que validate()).
+   *
+   * Réutilisable en interne (pas seulement via HTTP) : appelée directement par le job
+   * d'expiration mobile money (S22) avec actorId: null (aucun contexte HTTP) — c'est la
+   * raison pour laquelle S21b et S22 partagent cette méthode plutôt que de dupliquer la
+   * logique de restitution entre une annulation manuelle et une expiration automatique.
+   * Le paiement déjà encaissé n'est PAS touché — un remboursement est un acte séparé
+   * (§18.18 point 4, hors périmètre de cette session).
+   *
+   * @param actorId - utilisateur à l'origine de l'annulation, ou null si système (expiration).
+   * @throws NotFoundException si la vente est introuvable.
+   * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
+   * @throws BadRequestException si la vente est PENDING ou déjà CANCELLED (stock jamais mouvementé
+   *         ou déjà restitué — pas de double restitution).
+   * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
+   */
+  async cancel(
+    id: string,
+    organizationId: string,
+    { reason, actorId }: { reason: string; actorId: string | null },
+  ): Promise<SaleResponse> {
+    let stockUpdates: StockUpdate[] = [];
+    let capturedWarehouseId!: string;
+
+    await this.prisma
+      .$transaction(
+        async (tx) => {
+          const existing = await tx.sale.findUnique({
+            where: { id },
+            select: { ...SALE_SELECT, details: { select: DETAIL_SELECT } },
           });
-      }
-    }
+
+          if (!existing || existing.deletedAt !== null) {
+            throw new NotFoundException('Vente introuvable.');
+          }
+          if (existing.organizationId !== organizationId) {
+            throw new ForbiddenException('Accès refusé.');
+          }
+          if (existing.status !== 'COMPLETED' && existing.status !== 'AWAITING_PAYMENT') {
+            throw new BadRequestException(
+              'Seule une vente validée (COMPLETED) ou en attente de paiement mobile money ' +
+                '(AWAITING_PAYMENT) peut être annulée.',
+            );
+          }
+
+          capturedWarehouseId = existing.warehouseId;
+
+          const grouped = await this.groupDetailsByProduct(tx, existing.details);
+
+          stockUpdates = await this.moveStock(
+            tx,
+            organizationId,
+            existing.warehouseId,
+            grouped,
+            'increment',
+          );
+
+          await tx.sale.update({
+            where: { id },
+            data: {
+              status: 'CANCELLED',
+              cancelReason: reason,
+              cancelledAt: new Date(),
+              cancelledById: actorId,
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .catch((err: unknown) => this.rethrowStockConflict(err));
+
+    this.emitStockEvents(organizationId, capturedWarehouseId, stockUpdates);
 
     return this.prisma.sale.findUniqueOrThrow({
       where: { id },
@@ -627,6 +581,207 @@ export class SaleService {
   }
 
   // ─── Helpers privés ──────────────────────────────────────────────────────────
+
+  /**
+   * Regroupe les lignes d'une vente par (productId, productVariantId), en convertissant
+   * chaque quantité dans l'unité de stock du produit via convertToBase si saleUnitId en
+   * diffère — AVANT sommation, pour n'appliquer qu'un seul mouvement de stock cumulé par
+   * couple produit/variante (jamais un appel par ligne brute, sinon la 2e ligne du même
+   * produit utiliserait une version déjà obsolète après le premier adjustStock).
+   * Partagé par validate() (décrément) et cancel() (restitution) — même logique de
+   * regroupement/conversion, seul le sens du mouvement diffère (cf. moveStock).
+   */
+  private async groupDetailsByProduct(
+    tx: Prisma.TransactionClient,
+    details: { productId: string; productVariantId: string | null; saleUnitId: string | null; quantity: Decimal }[],
+  ): Promise<Map<string, { productId: string; productVariantId: string | null; quantity: Decimal }>> {
+    // Unité de stock de chaque produit référencé (pour savoir si une conversion est nécessaire).
+    const productIds = [...new Set(details.map((d) => d.productId))];
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, unitId: true },
+    });
+    const productUnitMap = new Map(products.map((p) => [p.id, p.unitId]));
+
+    // Unit référencées par saleUnitId (operator/operatorValue pour convertToBase).
+    const saleUnitIds = [
+      ...new Set(details.filter((d) => d.saleUnitId).map((d) => d.saleUnitId as string)),
+    ];
+    const units =
+      saleUnitIds.length > 0
+        ? await tx.unit.findMany({
+            where: { id: { in: saleUnitIds } },
+            select: { id: true, operator: true, operatorValue: true },
+          })
+        : [];
+    const unitMap = new Map(units.map((u) => [u.id, u]));
+
+    const grouped = new Map<
+      string,
+      { productId: string; productVariantId: string | null; quantity: Decimal }
+    >();
+    for (const detail of details) {
+      const productUnitId = productUnitMap.get(detail.productId) ?? null;
+      let qty = new Decimal(detail.quantity);
+      if (detail.saleUnitId && detail.saleUnitId !== productUnitId) {
+        const unit = unitMap.get(detail.saleUnitId);
+        // Défensif : ne devrait jamais être null (ownership de saleUnitId déjà vérifiée
+        // à la création de la vente, S19) — NotFoundException plutôt qu'un crash TypeScript.
+        if (!unit) {
+          throw new NotFoundException('Unité de vente introuvable.');
+        }
+        qty = convertToBase(qty, unit);
+      }
+      const key = `${detail.productId}::${detail.productVariantId ?? ''}`;
+      const g = grouped.get(key);
+      if (g) {
+        g.quantity = g.quantity.plus(qty);
+      } else {
+        grouped.set(key, {
+          productId: detail.productId,
+          productVariantId: detail.productVariantId,
+          quantity: qty,
+        });
+      }
+    }
+    return grouped;
+  }
+
+  /**
+   * Applique un mouvement de stock cumulé par (productId, productVariantId) — décrément
+   * (validate, delta négatif, garde stock insuffisant AVANT adjustStock) ou restitution
+   * (cancel, delta positif, aucune garde nécessaire) — sous verrouillage optimiste
+   * (ProductWarehouseService.adjustStock, version + transaction Serializable déjà ouverte
+   * par l'appelant).
+   *
+   * @throws NotFoundException si le ProductWarehouse est introuvable dans l'entrepôt.
+   * @throws BadRequestException (decrement uniquement) si le stock disponible est insuffisant.
+   */
+  private async moveStock(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    warehouseId: string,
+    grouped: Map<string, { productId: string; productVariantId: string | null; quantity: Decimal }>,
+    direction: 'decrement' | 'increment',
+  ): Promise<StockUpdate[]> {
+    const stockUpdates: StockUpdate[] = [];
+
+    for (const group of grouped.values()) {
+      // Filtre product: { organizationId } : protège contre l'IDOR sur productVariantId
+      // (patron identique à StockTransferService.validate).
+      const pw = await tx.productWarehouse.findFirst({
+        where: {
+          productId: group.productId,
+          warehouseId,
+          productVariantId: group.productVariantId ?? null,
+          product: { organizationId },
+        },
+        select: {
+          id: true,
+          version: true,
+          quantity: true,
+          product: { select: { stockAlert: true, name: true } },
+        },
+      });
+
+      if (!pw) {
+        throw new NotFoundException(
+          "Stock introuvable dans l'entrepôt de la vente. " +
+            'Initialisez le stock avant de valider.',
+        );
+      }
+
+      if (direction === 'decrement' && group.quantity.greaterThan(pw.quantity)) {
+        throw new BadRequestException(
+          `Stock insuffisant pour ${pw.product.name} : ` +
+            `disponible ${pw.quantity.toFixed(3)}, demandé ${group.quantity.toFixed(3)}.`,
+        );
+      }
+
+      const delta = direction === 'decrement' ? group.quantity.negated() : group.quantity;
+
+      const updated = await this.productWarehouseService.adjustStock(
+        tx,
+        pw.id,
+        organizationId,
+        delta,
+        pw.version,
+      );
+
+      stockUpdates.push({
+        productId: group.productId,
+        newQuantity: updated.quantity,
+        productName: pw.product.name,
+        stockAlert: pw.product.stockAlert,
+      });
+    }
+
+    return stockUpdates;
+  }
+
+  /**
+   * Convertit les erreurs de concurrence de bas niveau (verrouillage optimiste,
+   * sérialisation Postgres P2034) en ConflictException — patron identique pour
+   * validate() et cancel().
+   */
+  private rethrowStockConflict(err: unknown): never {
+    if (err instanceof OptimisticLockException) {
+      throw new ConflictException(
+        'Conflit de version sur le stock : un autre utilisateur a modifié le stock simultanément. Veuillez réessayer.',
+      );
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+      throw new ConflictException('Conflit de concurrence détecté. Veuillez réessayer.');
+    }
+    throw err;
+  }
+
+  /**
+   * Émet stock:updated (toujours) puis stock:lowAlert + notification persistée par produit
+   * dont la nouvelle quantité atteint le seuil d'alerte — patron identique à
+   * StockTransferService.validate, partagé par validate() et cancel().
+   */
+  private emitStockEvents(
+    organizationId: string,
+    warehouseId: string,
+    stockUpdates: StockUpdate[],
+  ): void {
+    this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:updated', {
+      warehouseId,
+      products: stockUpdates.map((u) => ({ productId: u.productId, newQuantity: u.newQuantity })),
+    });
+
+    for (const update of stockUpdates) {
+      if (
+        update.stockAlert > 0 &&
+        update.newQuantity.lessThanOrEqualTo(new Decimal(update.stockAlert))
+      ) {
+        this.realtimeGateway.server.to(`org:${organizationId}`).emit('stock:lowAlert', {
+          productId: update.productId,
+          productName: update.productName,
+          currentQuantity: update.newQuantity,
+          threshold: update.stockAlert,
+        });
+        // Persiste l'alerte pour les utilisateurs hors-ligne (§17 point I — S18)
+        this.notificationService
+          .createForOrg(
+            organizationId,
+            'stock.lowAlert',
+            {
+              productId: update.productId,
+              productName: update.productName,
+              currentQuantity: update.newQuantity.toString(),
+              threshold: update.stockAlert,
+              warehouseId,
+            },
+            'reports.quantityAlerts',
+          )
+          .catch((err: unknown) => {
+            this.logger.error('Erreur création notification stock.lowAlert (vente)', err);
+          });
+      }
+    }
+  }
 
   /**
    * Calcule le total d'une ligne côté serveur :
