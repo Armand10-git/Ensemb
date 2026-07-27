@@ -70,6 +70,23 @@ interface Sale {
   details?: SaleDetail[];
 }
 
+type PaymentMethod = 'CASH' | 'CARD' | 'MOBILE_MONEY' | 'BANK_TRANSFER';
+
+interface PaymentSaleResponse {
+  id: string;
+  organizationId: string;
+  saleId: string;
+  userId: string;
+  date: string;
+  reference: string;
+  amount: string;
+  method: PaymentMethod;
+  change: string;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface Paginated<T> { data: T[]; total: number; page: number; limit: number }
 
 interface ClientRef { id: string; name: string }
@@ -153,6 +170,32 @@ function useDeleteSale() {
   });
 }
 
+/** Historique des règlements d'une vente, triés chronologiquement par le serveur (date ASC). */
+function useSalePayments(saleId: string) {
+  return useQuery<PaymentSaleResponse[]>({
+    queryKey: ['sale-payments', saleId],
+    queryFn: () => api.get<PaymentSaleResponse[]>(`/sales/${saleId}/payments`),
+    enabled: saleId !== '',
+  });
+}
+
+/**
+ * Enregistre un paiement sur une vente. Invalide l'historique des paiements, le détail de
+ * la vente (le statut/paidAmount recalculés côté serveur doivent se refléter immédiatement
+ * dans PaymentBadge) et la liste des ventes (badge de paiement affiché en colonne).
+ */
+function useCreateSalePayment(saleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: unknown) => api.post<PaymentSaleResponse>(`/sales/${saleId}/payments`, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['sale-payments', saleId] });
+      void qc.invalidateQueries({ queryKey: ['sale', saleId] });
+      void qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+  });
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeEmptyRow(): DetailFormRow {
@@ -191,6 +234,14 @@ function StatusBadge({ status }: { status: DocumentStatus }) {
   const s = map[status];
   return <Badge variant={s.variant}>{s.label}</Badge>;
 }
+
+/** Libellés français des méthodes de paiement (PaymentSale.method). */
+const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  CASH: 'Espèces',
+  CARD: 'Carte',
+  MOBILE_MONEY: 'Mobile Money',
+  BANK_TRANSFER: 'Virement bancaire',
+};
 
 // ─── Formulaire de création ───────────────────────────────────────────────────
 
@@ -370,6 +421,126 @@ function SaleForm({
   );
 }
 
+// ─── Formulaire d'ajout de paiement ────────────────────────────────────────────
+
+/**
+ * Formulaire de règlement — solde restant affiché en évidence, raccourci « Solder »
+ * pré-remplissant le montant exact. Le montant est borné au solde restant au blur
+ * (jamais rejeté au submit — [18.5] "Montant supérieur au solde → borné à la saisie
+ * avec explication, pas rejeté au submit"). Le serveur reste l'arbitre final du calcul :
+ * ce composant n'affiche le solde qu'à titre indicatif.
+ */
+function PaymentForm({
+  remaining,
+  onSave,
+  saving,
+}: {
+  remaining: number;
+  onSave: (data: { date: string; amount: string; method: PaymentMethod; notes?: string }) => void;
+  saving: boolean;
+}) {
+  const remainingStr = remaining.toFixed(3);
+  const [date, setDate]     = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState(remainingStr);
+  const [method, setMethod] = useState<PaymentMethod>('CASH');
+  const [notes, setNotes]   = useState('');
+  const [clamped, setClamped] = useState(false);
+
+  function handleAmountChange(value: string) {
+    setAmount(value);
+    setClamped(false);
+  }
+
+  /** Borne le montant au solde restant à la perte de focus — jamais au submit. */
+  function handleAmountBlur() {
+    const value = parseFloat(amount);
+    if (!Number.isNaN(value) && value > remaining) {
+      setAmount(remainingStr);
+      setClamped(true);
+    }
+  }
+
+  function handleSolder() {
+    setAmount(remainingStr);
+    setClamped(false);
+  }
+
+  function buildPayload() {
+    return {
+      date: new Date(date).toISOString(),
+      amount,
+      method,
+      notes: notes || undefined,
+    };
+  }
+
+  const amountValue = parseFloat(amount);
+  const canSubmit = date !== '' && !Number.isNaN(amountValue) && amountValue > 0;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="rounded-card bg-brand-50 px-4 py-3">
+        <p className="text-[11.5px] text-brand-700/70">Solde restant</p>
+        <p className="tabular mt-0.5 text-[19px] font-semibold text-brand-800">{formatXAF(remainingStr)}</p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Date *</Label>
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label>Montant *</Label>
+          <Button variant="secondary" size="sm" type="button" onClick={handleSolder}>
+            Solder
+          </Button>
+        </div>
+        <Input
+          type="number"
+          step="0.001"
+          min="0"
+          max={remainingStr}
+          value={amount}
+          onChange={(e) => handleAmountChange(e.target.value)}
+          onBlur={handleAmountBlur}
+          className="tabular"
+        />
+        {clamped && (
+          <p className="text-[12px] text-amber-700">
+            Montant ramené au solde restant ({formatXAF(remainingStr)}).
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Méthode *</Label>
+        <NativeSelect value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
+          {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((m) => (
+            <option key={m} value={m}>{PAYMENT_METHOD_LABELS[m]}</option>
+          ))}
+        </NativeSelect>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Note</Label>
+        <Textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          maxLength={500}
+          placeholder="Note interne…"
+        />
+      </div>
+
+      <Button onClick={() => onSave(buildPayload())} disabled={!canSubmit} loading={saving} size="lg">
+        {!saving && 'Enregistrer'}
+        {saving && 'Enregistrement…'}
+      </Button>
+    </div>
+  );
+}
+
 // ─── Vue détail ───────────────────────────────────────────────────────────────
 
 function SaleDetailView({
@@ -381,6 +552,25 @@ function SaleDetailView({
   products: ProductRef[];
   onDelete: () => void;
 }) {
+  const qc = useQueryClient();
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+
+  const { data: payments, isLoading: paymentsLoading, isError: paymentsError } = useSalePayments(sale.id);
+  const createPaymentMutation = useCreateSalePayment(sale.id);
+
+  // Solde restant — affichage uniquement, le serveur reste l'arbitre du calcul réel (§17 point A).
+  const remaining = Math.max(Number(sale.grandTotal) - Number(sale.paidAmount), 0);
+
+  async function handleSavePayment(data: { date: string; amount: string; method: PaymentMethod; notes?: string }) {
+    try {
+      await createPaymentMutation.mutateAsync(data);
+      setPaymentSheetOpen(false);
+      toast.success('Paiement enregistré.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement du paiement.");
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -451,12 +641,89 @@ function SaleDetailView({
         </div>
       </div>
 
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[12.5px] font-semibold text-neutral-700">Paiements ({payments?.length ?? 0})</p>
+          {sale.paymentStatus !== 'PAID' && (
+            <Button variant="secondary" size="sm" onClick={() => setPaymentSheetOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              Ajouter un paiement
+            </Button>
+          )}
+        </div>
+
+        {paymentsLoading && (
+          <div className="flex flex-col gap-2">
+            {[1, 2].map((i) => <div key={i} className="h-9 animate-pulse rounded-field bg-neutral-100" />)}
+          </div>
+        )}
+
+        {paymentsError && (
+          <div className="flex items-center justify-between rounded-card border border-danger-200 bg-danger-50 px-3.5 py-3 text-[13px] text-danger-700">
+            <span>Impossible de charger l&apos;historique des paiements.</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void qc.invalidateQueries({ queryKey: ['sale-payments', sale.id] })}
+            >
+              Réessayer
+            </Button>
+          </div>
+        )}
+
+        {!paymentsLoading && !paymentsError && (payments?.length ?? 0) === 0 && (
+          <div className="rounded-card border border-dashed border-neutral-300 bg-white px-3.5 py-5 text-center text-[13px] text-neutral-500">
+            Aucun paiement enregistré pour cette vente.
+          </div>
+        )}
+
+        {!paymentsLoading && !paymentsError && (payments?.length ?? 0) > 0 && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Méthode</TableHead>
+                <TableHead className="text-right">Montant</TableHead>
+                <TableHead>Référence</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(payments ?? []).map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>{formatDate(p.date)}</TableCell>
+                  <TableCell>{PAYMENT_METHOD_LABELS[p.method]}</TableCell>
+                  <TableCell className="tabular text-right">{formatXAF(p.amount)}</TableCell>
+                  <TableCell className="tabular text-neutral-500">{p.reference}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
       {sale.status === 'PENDING' && (
         <Button variant="destructive" onClick={onDelete}>
           <Trash2 className="h-4 w-4" />
           Supprimer
         </Button>
       )}
+
+      {/* ── Sheet ajout de paiement ─────────────────────────────────────── */}
+      <Sheet open={paymentSheetOpen} onOpenChange={setPaymentSheetOpen}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Ajouter un paiement</SheetTitle>
+            <SheetDescription>Vente {sale.reference} — le statut est recalculé côté serveur.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <PaymentForm
+              remaining={remaining}
+              onSave={(payload) => void handleSavePayment(payload)}
+              saving={createPaymentMutation.isPending}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

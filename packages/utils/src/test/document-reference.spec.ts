@@ -24,4 +24,8 @@ describe('formatReference', () => {
     expect(formatReference('TRANSFER',       2026, 1)).toBe('TRF-2026-000001');
     expect(formatReference('ADJUSTMENT',     2026, 1)).toBe('AJT-2026-000001');
   });
+
+  it('PAYMENT_SALE counter=1 → PAY-2026-000001 (S20 — paiements de vente)', () => {
+    expect(formatReference('PAYMENT_SALE', 2026, 1)).toBe('PAY-2026-000001');
+  });
 });
