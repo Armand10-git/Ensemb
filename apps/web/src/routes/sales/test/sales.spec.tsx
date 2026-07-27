@@ -155,3 +155,148 @@ describe('SalesPage', () => {
     await waitFor(() => expect(screen.getByText(/Vente créée. Référence : VTE-2026-000001/)).toBeInTheDocument());
   });
 });
+
+// ─── Paiements (S20) ────────────────────────────────────────────────────────────
+
+const PAYMENT_ID = 'pay00001-0000-0000-0000-000000000001';
+
+function makePaymentSale(overrides: Record<string, unknown> = {}) {
+  return {
+    id: PAYMENT_ID,
+    organizationId: 'org00001-0000-0000-0000-000000000001',
+    saleId: SALE_ID,
+    userId: 'user0001-0000-0000-0000-000000000001',
+    date: '2026-07-26T00:00:00.000Z',
+    reference: 'PAY-2026-000001',
+    amount: '15000',
+    method: 'CASH',
+    change: '0',
+    notes: null,
+    createdAt: '2026-07-26T00:00:00.000Z',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('SalesPage — Paiements (S20)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Route la vente/l'historique des paiements en plus des fixtures partagées (clients, entrepôts, produits). */
+  function mockGet(saleDetail: ReturnType<typeof makeSale>, payments: unknown[]) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments'))          return Promise.resolve(payments);
+      if (path.includes('/sales?'))            return Promise.resolve(saleListResp);
+      if (path.includes('/sales/'))            return Promise.resolve(saleDetail);
+      return Promise.resolve(emptySales);
+    });
+  }
+
+  async function openDetail() {
+    renderPage();
+    await waitFor(() => screen.getByText('VTE-2026-000001'));
+    await userEvent.click(screen.getByText('VTE-2026-000001'));
+    await waitFor(() => expect(screen.getByText(/Paiements \(/)).toBeInTheDocument());
+  }
+
+  // ── Ouverture du Sheet / visibilité conditionnelle ────────────────────────
+
+  it('le bouton "Ajouter un paiement" ouvre le Sheet de règlement', async () => {
+    mockGet(makeSale(), []); // paymentStatus UNPAID (paidAmount '0')
+    await openDetail();
+
+    await userEvent.click(screen.getByText('Ajouter un paiement'));
+
+    // Le libellé apparaît deux fois une fois le Sheet ouvert : le bouton déclencheur
+    // (toujours présent, la vue détail reste montée derrière le Sheet) + le titre du Sheet.
+    await waitFor(() => expect(screen.getAllByText('Ajouter un paiement').length).toBeGreaterThan(1));
+    expect(screen.getByText('Solde restant')).toBeInTheDocument();
+  });
+
+  it('le bouton "Ajouter un paiement" est absent quand paymentStatus === PAID', async () => {
+    mockGet({ ...makeSale(), paidAmount: '15000', paymentStatus: 'PAID' }, []);
+    await openDetail();
+
+    expect(screen.queryByText('Ajouter un paiement')).not.toBeInTheDocument();
+  });
+
+  // ── Raccourci "Solder" ─────────────────────────────────────────────────────
+
+  it('le raccourci "Solder" pré-remplit exactement le solde restant affiché', async () => {
+    // grandTotal 15000 − paidAmount 5000 = solde 10000
+    mockGet({ ...makeSale(), paidAmount: '5000', paymentStatus: 'PARTIAL' }, []);
+    await openDetail();
+
+    await userEvent.click(screen.getByText('Ajouter un paiement'));
+    await waitFor(() => screen.getByText('Solde restant'));
+    expect(screen.getByText('10 000 XAF')).toBeInTheDocument();
+
+    const amountInput = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(amountInput.value).toBe('10000.000');
+
+    // L'utilisateur modifie le montant, puis "Solder" doit le ramener exactement au solde.
+    await userEvent.clear(amountInput);
+    await userEvent.type(amountInput, '3000');
+    expect(amountInput.value).toBe('3000');
+
+    await userEvent.click(screen.getByText('Solder'));
+    // jsdom réapplique l'algorithme de sanitisation des <input type="number"> lors d'une
+    // réaffectation programmatique ultérieure (retire les zéros de fin) — on compare donc
+    // la valeur numérique, ce qui reste la garantie fonctionnelle attendue : exactement le solde.
+    expect(Number(amountInput.value)).toBe(10000);
+  });
+
+  // ── Soumission réussie ───────────────────────────────────────────────────────
+
+  it('soumission réussie → toast de confirmation et invalidation déclenchant un refetch de l\'historique', async () => {
+    let paymentsCallCount = 0;
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments')) {
+        paymentsCallCount += 1;
+        // Avant soumission : historique vide. Après invalidation (refetch) : le paiement créé apparaît.
+        return Promise.resolve(paymentsCallCount === 1 ? [] : [makePaymentSale()]);
+      }
+      if (path.includes('/sales?')) return Promise.resolve(saleListResp);
+      if (path.includes('/sales/')) return Promise.resolve(makeSale());
+      return Promise.resolve(emptySales);
+    });
+    mockApi.post.mockResolvedValue(makePaymentSale());
+
+    await openDetail();
+    await userEvent.click(screen.getByText('Ajouter un paiement'));
+    await waitFor(() => screen.getByText('Solde restant'));
+
+    await userEvent.click(screen.getByText('Enregistrer'));
+
+    await waitFor(() => expect(screen.getByText('Paiement enregistré.')).toBeInTheDocument());
+    // La liste des paiements a été refetchée (invalidateQueries) et affiche le nouveau paiement.
+    await waitFor(() => expect(screen.getByText('PAY-2026-000001')).toBeInTheDocument());
+    expect(paymentsCallCount).toBeGreaterThan(1);
+  });
+
+  // ── Erreur serveur (400) ──────────────────────────────────────────────────────
+
+  it('le serveur renvoie 400 (montant > solde) → message d\'erreur affiché, pas de crash', async () => {
+    mockGet(makeSale(), []);
+    mockApi.post.mockRejectedValue(new Error('Le montant dépasse le solde restant (15000.000).'));
+
+    await openDetail();
+    await userEvent.click(screen.getByText('Ajouter un paiement'));
+    await waitFor(() => screen.getByText('Solde restant'));
+
+    await userEvent.click(screen.getByText('Enregistrer'));
+
+    await waitFor(() =>
+      expect(screen.getByText('Le montant dépasse le solde restant (15000.000).')).toBeInTheDocument(),
+    );
+    // Pas de crash : le Sheet de paiement reste affiché et utilisable.
+    expect(screen.getByText('Enregistrer')).toBeInTheDocument();
+  });
+});

@@ -204,6 +204,7 @@ model Organization {
   transfers        StockTransfer[]
   notifications    Notification[]
   sales            Sale[]
+  paymentSales     PaymentSale[]
 
   @@map("organizations")
 }
@@ -284,6 +285,7 @@ model User {
   transfers     StockTransfer[]
   notifications Notification[]
   sales         Sale[]
+  paymentSales  PaymentSale[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -650,6 +652,8 @@ enum DocumentType {
   PURCHASE_RETURN
   TRANSFER
   ADJUSTMENT
+  /// Paiement d'une vente (S20) — séquence globale par organisation, indépendante de Sale.
+  PAYMENT_SALE
 }
 
 /// Compteur de référence par (organisation, type de document, année civile).
@@ -919,17 +923,45 @@ model SaleDetail {
   @@map("sale_details")
 }
 
-/// Stub minimal (S19) — table créée maintenant pour que la relation Sale.payments soit
-/// valide sans migration destructive ultérieure ; les champs métier (userId, date,
-/// reference, amount, method, change, notes) et le recalcul de paymentStatus seront
-/// ajoutés en S20 par des colonnes additives (jamais de colonne requise sans défaut sur
-/// une table déjà peuplée).
+/// Moyen de paiement d'un encaissement de vente (S20).
+enum PaymentMethod {
+  CASH
+  CARD
+  MOBILE_MONEY
+  BANK_TRANSFER
+}
+
+/// Paiement encaissé sur une vente (S20 — complète le stub posé en S19).
+/// organizationId est dénormalisé depuis sale.organizationId pour éviter un join sur
+/// chaque contrôle IDOR. reference générée via DocumentCounterService.nextReference
+/// avec DocumentType.PAYMENT_SALE — séquence globale par organisation (format
+/// PAY-YYYY-NNNNNN), pas dérivée de la référence de la vente.
+/// Pas de soft delete : PaymentSale n'est pas un document financier au sens de la règle
+/// §17 point 7 (pas de DocumentStatus propre) — la suppression est physique, la
+/// traçabilité est assurée par AuditLog (@Auditable sur la route DELETE).
+/// Sale.paidAmount/paymentStatus sont recalculés à chaque create/update/remove par
+/// PaymentSaleService — jamais saisis directement (§17 point 6).
 model PaymentSale {
-  id        String   @id @default(uuid()) @db.Uuid
-  saleId    String   @db.Uuid
-  createdAt DateTime @default(now())
+  id             String        @id @default(uuid()) @db.Uuid
+  saleId         String        @db.Uuid
+  organizationId String        @db.Uuid
+  /// Utilisateur qui a encaissé le paiement
+  userId         String        @db.Uuid
+  date           DateTime
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "PAY-2026-000001")
+  reference      String
+  amount         Decimal       @db.Decimal(14, 3)
+  method         PaymentMethod
+  /// Monnaie rendue au client (paiement espèces) — Decimal obligatoire (§17 point A)
+  change         Decimal?      @default(0) @db.Decimal(14, 3)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
-  sale Sale @relation(fields: [saleId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
 
+  @@index([organizationId, saleId])
   @@map("payment_sales")
 }
