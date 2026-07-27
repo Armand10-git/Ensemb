@@ -76,6 +76,8 @@ export class PaymentSaleService {
 
   /**
    * Enregistre un paiement sur une vente et recalcule Sale.paidAmount/paymentStatus.
+   * Ouvre sa propre transaction — cf. createInTransaction() pour l'appel depuis une
+   * transaction déjà ouverte par un autre service (PosModule, S22).
    *
    * @param organizationId - Tenant courant (extrait du token, anti-IDOR).
    * @param userId         - Utilisateur qui encaisse (extrait du token).
@@ -91,42 +93,59 @@ export class PaymentSaleService {
     saleId: string,
     dto: CreatePaymentDto,
   ): Promise<PaymentSaleResponse> {
-    return this.prisma.$transaction(async (tx) => {
-      const sale = await this.loadSaleForWrite(tx, saleId, organizationId);
+    return this.prisma.$transaction((tx) =>
+      this.createInTransaction(tx, organizationId, userId, saleId, dto),
+    );
+  }
 
-      const amount = new Decimal(dto.amount);
-      const remaining = sale.grandTotal.minus(sale.paidAmount);
-      if (amount.greaterThan(remaining)) {
-        throw new BadRequestException(
-          `Le montant dépasse le solde restant (${remaining.toFixed(3)}).`,
-        );
-      }
+  /**
+   * Coeur de create() — extrait pour être appelable DANS une transaction Serializable déjà
+   * ouverte par un autre service (PosService.createSale/confirmPayment, S22), afin que la
+   * création de la vente, le décrément de stock et l'encaissement immédiat CASH/CARD restent
+   * une seule opération atomique. Ne PAS appeler directement depuis un contexte HTTP — passer
+   * par create() qui ouvre sa propre transaction.
+   */
+  async createInTransaction(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    userId: string,
+    saleId: string,
+    dto: CreatePaymentDto,
+  ): Promise<PaymentSaleResponse> {
+    const sale = await this.loadSaleForWrite(tx, saleId, organizationId);
 
-      const reference = await this.documentCounter.nextReference(
-        tx,
-        organizationId,
-        DocumentType.PAYMENT_SALE,
+    const amount = new Decimal(dto.amount);
+    const remaining = sale.grandTotal.minus(sale.paidAmount);
+    if (amount.greaterThan(remaining)) {
+      throw new BadRequestException(
+        `Le montant dépasse le solde restant (${remaining.toFixed(3)}).`,
       );
+    }
 
-      const payment = await tx.paymentSale.create({
-        data: {
-          saleId,
-          organizationId,
-          userId,
-          date: new Date(dto.date),
-          reference,
-          amount,
-          method: dto.method,
-          change: new Decimal(dto.change ?? '0'),
-          notes: dto.notes,
-        },
-        select: PAYMENT_SELECT,
-      });
+    const reference = await this.documentCounter.nextReference(
+      tx,
+      organizationId,
+      DocumentType.PAYMENT_SALE,
+    );
 
-      await this.recomputeSaleStatus(tx, saleId);
-
-      return payment;
+    const payment = await tx.paymentSale.create({
+      data: {
+        saleId,
+        organizationId,
+        userId,
+        date: new Date(dto.date),
+        reference,
+        amount,
+        method: dto.method,
+        change: new Decimal(dto.change ?? '0'),
+        notes: dto.notes,
+      },
+      select: PAYMENT_SELECT,
     });
+
+    await this.recomputeSaleStatus(tx, saleId);
+
+    return payment;
   }
 
   /**

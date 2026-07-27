@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText } from 'lucide-react';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -65,6 +65,8 @@ interface Sale {
   paymentStatus: PaymentStatus;
   status: DocumentStatus;
   notes: string | null;
+  cancelReason: string | null;
+  cancelledAt: string | null;
   createdAt: string;
   client?: { id: string; name: string };
   warehouse?: { id: string; name: string };
@@ -182,6 +184,22 @@ function useValidateSale() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.patch<Sale>(`/sales/${id}/validate`, {}),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['sales'] });
+      void qc.invalidateQueries({ queryKey: ['sale', data.id] });
+    },
+  });
+}
+
+/**
+ * Annule une vente COMPLETED (§18.18) : le stock est restitué côté serveur, raison obligatoire.
+ * Invalide la liste des ventes et le détail de la vente concernée (badge de statut).
+ */
+function useCancelSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      api.patch<Sale>(`/sales/${id}/cancel`, { reason }),
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: ['sales'] });
       void qc.invalidateQueries({ queryKey: ['sale', data.id] });
@@ -567,12 +585,14 @@ function SaleDetailView({
   products,
   onValidate,
   onDelete,
+  onCancel,
   validating,
 }: {
   sale: Sale;
   products: ProductRef[];
   onValidate: () => void;
   onDelete: () => void;
+  onCancel: () => void;
   validating: boolean;
 }) {
   const qc = useQueryClient();
@@ -620,6 +640,13 @@ function SaleDetailView({
 
       {sale.notes && (
         <div className="rounded-card bg-neutral-50 px-3.5 py-3 text-[13.5px] text-neutral-700">{sale.notes}</div>
+      )}
+
+      {sale.status === 'CANCELLED' && sale.cancelReason && (
+        <div className="rounded-card border border-neutral-200 bg-neutral-50 px-3.5 py-3 text-[13.5px] text-neutral-700">
+          <p className="mb-0.5 text-[11.5px] font-semibold text-neutral-500">Raison de l&apos;annulation</p>
+          {sale.cancelReason}
+        </div>
       )}
 
       <div>
@@ -737,6 +764,15 @@ function SaleDetailView({
         </div>
       )}
 
+      {sale.status === 'COMPLETED' && (
+        <div className="pt-1">
+          <Button variant="destructive" className="w-full" onClick={onCancel}>
+            <Ban className="h-4 w-4" />
+            Annuler la vente
+          </Button>
+        </div>
+      )}
+
       {/* ── Sheet ajout de paiement ─────────────────────────────────────── */}
       <Sheet open={paymentSheetOpen} onOpenChange={setPaymentSheetOpen}>
         <SheetContent>
@@ -757,6 +793,65 @@ function SaleDetailView({
   );
 }
 
+// ─── AlertDialog d'annulation ───────────────────────────────────────────────────
+
+/**
+ * AlertDialog d'annulation de vente (§18.18) : nomme la vente, exige une raison
+ * (min 3 caractères, patron standards.md — irréversible = raison obligatoire).
+ */
+function CancelSaleDialog({
+  target,
+  onOpenChange,
+  onConfirm,
+  loading,
+}: {
+  target: { id: string; reference: string } | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (id: string, reason: string) => void;
+  loading: boolean;
+}) {
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    if (target === null) setReason('');
+  }, [target]);
+
+  const canConfirm = reason.trim().length >= 3;
+
+  return (
+    <AlertDialog open={target !== null} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Annuler la vente {target?.reference ?? ''} ?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Cette action est irréversible : le stock décrémenté sera restitué. Un paiement déjà
+            encaissé n&apos;est pas remboursé automatiquement.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="space-y-1.5">
+          <Label>Raison de l&apos;annulation *</Label>
+          <Textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            maxLength={500}
+            placeholder="Ex. erreur de saisie, produit défectueux…"
+          />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => onOpenChange(false)}>Retour</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={!canConfirm || loading}
+            onClick={() => target && onConfirm(target.id, reason.trim())}
+          >
+            {loading ? 'Annulation…' : "Confirmer l'annulation"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 // ─── Page principale ──────────────────────────────────────────────────────────
 
 export default function SalesPage() {
@@ -771,6 +866,7 @@ export default function SalesPage() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [detailId, setDetailId]   = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; reference: string } | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<{ id: string; reference: string } | null>(null);
 
   const { data, isLoading, isError } = useSales(page, limit, filterClient, filterWarehouse, filterStatus, '');
   const { data: detail, isLoading: detailLoading } = useSaleDetail(detailId);
@@ -785,6 +881,7 @@ export default function SalesPage() {
   const createMutation   = useCreateSale();
   const deleteMutation   = useDeleteSale();
   const validateMutation = useValidateSale();
+  const cancelMutation   = useCancelSale();
 
   // Socket.io — invalider le cache sur stock:updated (la validation d'une vente décrémente le stock)
   useEffect(() => {
@@ -827,6 +924,16 @@ export default function SalesPage() {
       toast.success('Vente validée. Stock mis à jour.');
     } catch {
       toast.error('Erreur lors de la validation.');
+    }
+  }
+
+  async function handleCancel(id: string, reason: string) {
+    try {
+      await cancelMutation.mutateAsync({ id, reason });
+      setCancelTarget(null);
+      toast.success('Vente annulée. Stock restitué.');
+    } catch {
+      toast.error("Erreur lors de l'annulation.");
     }
   }
 
@@ -1012,6 +1119,7 @@ export default function SalesPage() {
                 products={products}
                 onValidate={() => void handleValidate(detail.id)}
                 onDelete={() => setDeleteTarget({ id: detail.id, reference: detail.reference })}
+                onCancel={() => setCancelTarget({ id: detail.id, reference: detail.reference })}
                 validating={validateMutation.isPending}
               />
             )}
@@ -1039,6 +1147,14 @@ export default function SalesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── AlertDialog annulation ────────────────────────────────────────── */}
+      <CancelSaleDialog
+        target={cancelTarget}
+        onOpenChange={(open) => !open && setCancelTarget(null)}
+        onConfirm={(id, reason) => void handleCancel(id, reason)}
+        loading={cancelMutation.isPending}
+      />
     </div>
   );
 }

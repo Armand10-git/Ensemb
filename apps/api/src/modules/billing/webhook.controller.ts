@@ -3,7 +3,6 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
-  Param,
   Post,
   Req,
   UnauthorizedException,
@@ -22,14 +21,11 @@ interface WebhookPayload {
   [key: string]: unknown;
 }
 
-interface PosWebhookPayload {
-  type: string;
-  providerEventId: string;
-  [key: string]: unknown;
-}
-
 /**
- * Endpoints publics pour les webhooks de l'agrégateur de paiement.
+ * Endpoint public pour le webhook de facturation SaaS (abonnement plateforme).
+ * Le webhook mobile money POS vit dans PosModule (pos-webhook.controller.ts, S22) —
+ * les deux comptes agrégateur (plateforme vs tenant, §17 point M) ne doivent jamais
+ * partager de code au-delà de PaymentAggregatorService/verifyWebhookSignature.
  *
  * Sécurité (§17 point V) :
  * 1. Corps lu en Buffer brut pour la vérification HMAC — NestJS démarré avec rawBody: true
@@ -109,71 +105,6 @@ export class WebhookController {
       } catch (err) {
         this.logger.error(`Erreur confirmation paiement Invoice ${invoiceId}`, err);
       }
-    }
-
-    this.markProcessed(webhookEventId);
-    return { received: true };
-  }
-
-  /**
-   * POST /api/v1/webhooks/payments/:organizationId
-   * Webhook POS mobile money — stub (PosModule à créer en S21b).
-   * Route publique — protégée par signature HMAC, idempotente via WebhookEvent.
-   */
-  @Post('payments/:organizationId')
-  @HttpCode(HttpStatus.OK)
-  async handlePosPaymentWebhook(
-    @Param('organizationId') organizationId: string,
-    @Req() req: RawBodyRequest<Request>,
-  ): Promise<{ received: true }> {
-    const rawBody = req.rawBody;
-    if (!rawBody || rawBody.length === 0) {
-      this.logger.warn(`Webhook POS [org ${organizationId}] reçu sans corps brut`);
-      throw new UnauthorizedException('Corps de requête absent.');
-    }
-
-    const signature = (req.headers['x-aggregator-signature'] as string) ?? '';
-    if (!this.aggregator.verifyWebhookSignature(rawBody, signature)) {
-      this.logger.warn(`Webhook POS [org ${organizationId}] rejeté : signature HMAC invalide`);
-      throw new UnauthorizedException('Signature invalide.');
-    }
-
-    let payload: PosWebhookPayload;
-    try {
-      payload = JSON.parse(rawBody.toString('utf8')) as PosWebhookPayload;
-    } catch (err) {
-      this.logger.error(`Webhook POS [org ${organizationId}] : JSON invalide`, err);
-      return { received: true };
-    }
-
-    const { type, providerEventId } = payload;
-    const provider = 'pos-aggregator';
-
-    if (!providerEventId) {
-      this.logger.warn(`Webhook POS [org ${organizationId}] sans providerEventId — ignoré`);
-      return { received: true };
-    }
-
-    // Vérification que l'organisation existe (§17 — tout accès vérifie organizationId côté serveur)
-    const orgExists = await this.prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { id: true },
-    });
-    if (!orgExists) {
-      this.logger.warn(`Webhook POS — organizationId inconnu : ${organizationId}`);
-      // 200 pour ne pas révéler à l'agrégateur si l'org existe (même pattern que les autres erreurs)
-      return { received: true };
-    }
-
-    // Garde d'idempotence — clé composite (provider, providerEventId)
-    const webhookEventId = await this.persistWebhookEvent(provider, providerEventId, payload, organizationId);
-    if (webhookEventId === null) return { received: true };
-
-    // Stub : PosPaymentService sera câblé en S21b (PosModule)
-    if (type === 'payment.success') {
-      this.logger.log(
-        `[STUB] Paiement mobile money confirmé — providerEventId ${providerEventId}, org ${organizationId} (PosModule non encore implémenté)`,
-      );
     }
 
     this.markProcessed(webhookEventId);

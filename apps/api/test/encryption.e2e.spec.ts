@@ -3,9 +3,12 @@
  *  1. Round-trip chiffrement/déchiffrement via SmtpServer en vraie base
  *  2. Anti-fuite : un SELECT brut sur smtp_servers ne révèle pas le mot de passe en clair
  *  3. Webhook billing rejoué → 200 + confirmPayment appelé une seule fois
- *  4. Webhook POS mobile money rejoué → 200 + stub appelé une seule fois (compté via log spy)
+ *  4. Webhook POS mobile money rejoué → 200 + un seul WebhookEvent (idempotence, sans saleId
+ *     donc sans appel à PosService.confirmMobileMoneyPayment — cf. pos-webhook.e2e.spec.ts
+ *     pour le test de confirmation complet)
  *
- * Module minimal : ConfigModule, PrismaModule, AuditModule, EncryptionModule, SmtpModule, BillingModule.
+ * Module minimal : ConfigModule, PrismaModule, AuditModule, EncryptionModule, SmtpModule,
+ * BillingModule, PosModule (le webhook POS vit dans PosModule depuis S22).
  */
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -18,11 +21,13 @@ import request from 'supertest';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaModule } from '../src/common/prisma.module';
 import { RedisModule } from '../src/common/redis.module';
+import { DocumentCounterModule } from '../src/common/document-counter.module';
 import { EncryptionModule } from '../src/common/encryption.module';
 import { EncryptionService } from '../src/common/encryption.service';
 import { AuditModule } from '../src/modules/audit/audit.module';
 import { SmtpModule } from '../src/modules/smtp/smtp.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
+import { PosModule } from '../src/modules/pos/pos.module';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { PrismaService } from '../src/common/prisma.service';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
@@ -65,11 +70,13 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
         JwtModule.register({}),
         PrismaModule,
         RedisModule,
+        DocumentCounterModule,
         EncryptionModule,
         AuditModule,
         TenancyModule,
         SmtpModule,
         BillingModule,
+        PosModule,
       ],
       providers: [JwtStrategy],
     }).compile();

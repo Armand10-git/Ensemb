@@ -46,8 +46,6 @@ const makePrisma = (
 ) => ({
   webhookEvent,
   invoice,
-  // organization.findUnique requis par handlePosPaymentWebhook (validation org)
-  organization: { findUnique: jest.fn().mockResolvedValue({ id: 'org-uuid-mock' }) },
 });
 
 const makeController = (opts: {

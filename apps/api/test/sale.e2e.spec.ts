@@ -52,7 +52,7 @@ let warehouseAId: string;
 let productAId: string;
 let pwValId: string; // ProductWarehouse dédié aux tests de validate() (productAId @ warehouseAId)
 
-const PERMS = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete', 'sales.validate', 'records.viewAll'];
+const PERMS = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete', 'sales.validate', 'sales.cancel', 'records.viewAll'];
 const PERMS_NO_VIEWALL = ['sales.view', 'sales.create', 'sales.edit', 'sales.delete'];
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
@@ -508,6 +508,114 @@ describe('PATCH /api/v1/sales/:id/validate', () => {
 
     const deleteRes = await asA('delete', `/api/v1/sales/${saleId}`);
     expect(deleteRes.status).toBe(400);
+  });
+});
+
+// ─── PATCH /sales/:id/cancel (S21b, §18.18) ───────────────────────────────────
+// Restitue le stock décrémenté par validate() sous verrouillage optimiste, fait passer
+// le statut COMPLETED → CANCELLED, raison obligatoire, trace AuditLog (acteur + raison).
+
+describe('PATCH /api/v1/sales/:id/cancel', () => {
+  async function createAndValidate(quantity: string, warehouseQuantity = '100') {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal(warehouseQuantity), version: 0 },
+    });
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity }],
+    });
+    const saleId = created.body.id as string;
+    const validated = await asA('patch', `/api/v1/sales/${saleId}/validate`).send();
+    expect(validated.status).toBe(200);
+    return saleId;
+  }
+
+  it('200 — restitue ProductWarehouse.quantity, passe status à CANCELLED, trace AuditLog', async () => {
+    const saleId = await createAndValidate('4', '100');
+    // Après validate() : 100 - 4 = 96
+
+    const res = await asA('patch', `/api/v1/sales/${saleId}/cancel`).send({
+      reason: 'Erreur de saisie caissier',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('CANCELLED');
+    expect(res.body.cancelReason).toBe('Erreur de saisie caissier');
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('100');
+
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('CANCELLED');
+    expect(sale!.cancelReason).toBe('Erreur de saisie caissier');
+    expect(sale!.cancelledAt).not.toBeNull();
+    expect(sale!.cancelledById).not.toBeNull();
+
+    const auditLog = await prisma.auditLog.findFirst({
+      where: { entity: 'Sale', entityId: saleId, action: 'sales.cancel' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    expect(auditLog!.actorType).toBe('USER');
+  });
+
+  it('400 — raison absente', async () => {
+    const saleId = await createAndValidate('1', '50');
+
+    const res = await asA('patch', `/api/v1/sales/${saleId}/cancel`).send({});
+
+    expect(res.status).toBe(422);
+
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('COMPLETED');
+  });
+
+  it('400 — une vente PENDING (jamais validée) ne peut pas être annulée', async () => {
+    await prisma.productWarehouse.update({
+      where: { id: pwValId },
+      data: { quantity: new Decimal('50'), version: 0 },
+    });
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+
+    const res = await asA('patch', `/api/v1/sales/${created.body.id as string}/cancel`).send({
+      reason: 'Test',
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('400 — une vente déjà CANCELLED ne peut pas être annulée deux fois (pas de double restitution)', async () => {
+    const saleId = await createAndValidate('2', '30');
+    const first = await asA('patch', `/api/v1/sales/${saleId}/cancel`).send({ reason: 'Test 1' });
+    expect(first.status).toBe(200);
+
+    const second = await asA('patch', `/api/v1/sales/${saleId}/cancel`).send({ reason: 'Test 2' });
+    expect(second.status).toBe(400);
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    // 30 - 2 (validate) + 2 (une seule restitution) = 30, jamais 32
+    expect(new Decimal(pw!.quantity).toString()).toBe('30');
+  });
+
+  it('403 — isolation tenant : org B ne peut pas annuler une vente de org A', async () => {
+    const saleId = await createAndValidate('1', '50');
+
+    const res = await asB('patch', `/api/v1/sales/${saleId}/cancel`).send({ reason: 'Test' });
+
+    expect(res.status).toBe(403);
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('49');
+    const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale!.status).toBe('COMPLETED');
   });
 });
 

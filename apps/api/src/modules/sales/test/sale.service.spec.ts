@@ -525,4 +525,226 @@ describe('SaleService', () => {
       await expect(service.validate(SALE_ID, ORG_A)).rejects.toThrow(ConflictException);
     });
   });
+
+  // ─── cancel (S21b) ───────────────────────────────────────────────────────
+
+  describe('cancel', () => {
+    const REASON = 'Erreur de saisie caissier';
+
+    /** Construit une vente COMPLETED avec des lignes personnalisées pour les tests de cancel(). */
+    function makeCancelSale(details: Record<string, unknown>[]) {
+      return makeSale({ status: 'COMPLETED', details });
+    }
+
+    function mockCancelHappyPath(opts: {
+      pwQuantity: string;
+      newQuantity: string;
+      stockAlert?: number;
+      productName?: string;
+    }) {
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal(opts.pwQuantity),
+        product: { stockAlert: opts.stockAlert ?? 0, name: opts.productName ?? 'Produit' },
+      });
+      productWarehouseService.adjustStock.mockResolvedValue({
+        id: PW_ID,
+        productId: PROD_ID,
+        productVariantId: null,
+        warehouseId: WH_ID,
+        quantity: new Decimal(opts.newQuantity),
+        version: 1,
+      });
+      prisma.sale.update.mockResolvedValue({});
+      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeSale({ status: 'CANCELLED' }));
+    }
+
+    it('restitue correctement le stock d\'une ligne simple', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('3') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockCancelHappyPath({ pwQuantity: '7', newQuantity: '10' });
+
+      const result = await service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID });
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      const [, pwId, org, delta, version] = productWarehouseService.adjustStock.mock.calls[0] as [
+        unknown, string, string, Decimal, number,
+      ];
+      expect(pwId).toBe(PW_ID);
+      expect(org).toBe(ORG_A);
+      expect(delta.toString()).toBe('3'); // positif — restitution, inverse de validate()
+      expect(version).toBe(0);
+      expect(prisma.sale.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: SALE_ID },
+          data: expect.objectContaining({
+            status: 'CANCELLED',
+            cancelReason: REASON,
+            cancelledAt: expect.any(Date),
+            cancelledById: USER_ID,
+          }),
+        }),
+      );
+      expect(result.status).toBe('CANCELLED');
+    });
+
+    it('actorId null (job d\'expiration système) → cancelledById persisté à null', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('1') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockCancelHappyPath({ pwQuantity: '9', newQuantity: '10' });
+
+      await service.cancel(SALE_ID, ORG_A, { reason: 'Expiration du délai de paiement mobile money', actorId: null });
+
+      expect(prisma.sale.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ cancelledById: null }) }),
+      );
+    });
+
+    it('convertit la quantité via saleUnitId (2 cartons × 12 = 24 pièces restituées)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: UNIT_CARTON, quantity: new Decimal('2') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([
+        { id: UNIT_CARTON, operator: '*', operatorValue: new Decimal('12') },
+      ]);
+      mockCancelHappyPath({ pwQuantity: '76', newQuantity: '100' });
+
+      await service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID });
+
+      const [, , , delta] = productWarehouseService.adjustStock.mock.calls[0] as [unknown, unknown, unknown, Decimal];
+      expect(delta.toString()).toBe('24');
+    });
+
+    it('deux lignes du même produit → un seul appel à adjustStock avec la quantité cumulée', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+          { id: 'det2', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('3') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockCancelHappyPath({ pwQuantity: '15', newQuantity: '20' });
+
+      await service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID });
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      const [, , , delta] = productWarehouseService.adjustStock.mock.calls[0] as [unknown, unknown, unknown, Decimal];
+      expect(delta.toString()).toBe('5');
+    });
+
+    it('statut AWAITING_PAYMENT (expiration POS mobile money, S22) → restitution acceptée', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({
+          status: 'AWAITING_PAYMENT',
+          details: [
+            { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+          ],
+        }),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockCancelHappyPath({ pwQuantity: '8', newQuantity: '10' });
+
+      const result = await service.cancel(SALE_ID, ORG_A, {
+        reason: 'Expiration du délai de paiement mobile money',
+        actorId: null,
+      });
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      expect(prisma.sale.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED' }) }),
+      );
+      expect(result.status).toBe('CANCELLED');
+    });
+
+    it('statut PENDING → BadRequestException (seule une vente COMPLETED peut être annulée)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeCancelSale([]));
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'PENDING' }));
+
+      await expect(
+        service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+      ).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('statut déjà CANCELLED → BadRequestException (pas de double restitution)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'CANCELLED' }));
+
+      await expect(
+        service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+      ).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it("vente d'une autre organisation → ForbiddenException", async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ organizationId: ORG_B, status: 'COMPLETED' }));
+
+      await expect(
+        service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('vente introuvable → NotFoundException', async () => {
+      prisma.sale.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('lève ConflictException si adjustStock lève OptimisticLockException (conflit de version)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('1') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal('10'),
+        product: { stockAlert: 0, name: 'Produit' },
+      });
+      productWarehouseService.adjustStock.mockRejectedValue(new OptimisticLockException(PW_ID, 0, 1));
+
+      await expect(
+        service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('émet stock:updated après restitution', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeCancelSale([
+          { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+        ]),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockCancelHappyPath({ pwQuantity: '8', newQuantity: '10' });
+
+      await service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID });
+
+      expect(toEmit).toHaveBeenCalledWith(
+        'stock:updated',
+        expect.objectContaining({ warehouseId: WH_ID }),
+      );
+    });
+  });
 });
