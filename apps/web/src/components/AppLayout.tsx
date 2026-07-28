@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Users,
   Receipt,
+  ShoppingCart,
   Truck,
   Warehouse,
   Tag,
@@ -30,6 +31,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
 // ─── Navigation ────────────────────────────────────────────────────────────────
 
 const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: React.ElementType }[] }[] = [
+  { label: 'Caisse', items: [{ to: '/pos', label: 'Caisse', icon: ShoppingCart }] },
   { label: 'Catalogue', items: [{ to: '/catalog/products', label: 'Produits', icon: Package }] },
   { label: 'Ventes', items: [{ to: '/sales', label: 'Ventes', icon: Receipt }] },
   {
