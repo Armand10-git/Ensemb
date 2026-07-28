@@ -292,7 +292,7 @@ function ProductCard({
         <p className="tabular text-[12px] text-neutral-500">{product.code}</p>
       </div>
       <div className="flex w-full items-start justify-between gap-1.5">
-        <span className="tabular text-[13.5px] font-semibold leading-tight text-neutral-900">{formatXAF(product.price)}</span>
+        <span className="tabular whitespace-nowrap text-[13.5px] font-semibold leading-tight text-neutral-900">{formatXAF(product.price)}</span>
         {outOfStock ? (
           <Badge variant="danger" className="flex-shrink-0">Rupture</Badge>
         ) : (
