@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import PosPage from '../pos';
+import PosPage, { fractionToPercentString } from '../pos';
 import { Toaster } from '../../components/ui/sonner';
 
 // ─── Mock API ─────────────────────────────────────────────────────────────────
@@ -142,6 +142,24 @@ async function openCheckout() {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe('fractionToPercentString', () => {
+  it('convertit une fraction en pourcentage direct (0.1925 → 19.25)', () => {
+    expect(fractionToPercentString('0.1925')).toBe('19.25');
+  });
+
+  it('gère la fraction nulle (produit non taxé)', () => {
+    expect(fractionToPercentString('0')).toBe('0');
+  });
+
+  it('gère une fraction représentant 100% (1 → 100)', () => {
+    expect(fractionToPercentString('1')).toBe('100');
+  });
+
+  it('arrondit à 3 décimales pour rester compatible avec le regex serveur (\\d+(\\.\\d{1,3})?)', () => {
+    expect(fractionToPercentString('0.123456')).toBe('12.346');
+  });
+});
 
 describe('PosPage — Recherche produit', () => {
   beforeEach(() => {

@@ -120,11 +120,12 @@ function useDebounce<T>(value: T, delay: number): T {
  * divisé par 100 côté serveur — pos.service.ts computeLineTotal). Conversion nécessaire
  * pour que le panier applique le taux de TVA du produit sans le fausser d'un facteur 100.
  */
-function fractionToPercentString(fraction: string): string {
+export function fractionToPercentString(fraction: string): string {
   const pct = Number(fraction) * 100;
   return String(Number(pct.toFixed(3)));
 }
 
+/** Construit une ligne panier à partir d'un résultat de recherche — snapshot figé pour l'affichage. */
 function productToCartLine(product: ProductSearchResult): CartLine {
   return {
     productId: product.id,
@@ -137,6 +138,7 @@ function productToCartLine(product: ProductSearchResult): CartLine {
   };
 }
 
+/** Convertit une ligne panier au format PosLineDto attendu par calculate-total et pos/sales. */
 function cartLineToPosDetail(line: CartLine) {
   return {
     productId: line.productId,
@@ -149,6 +151,11 @@ function cartLineToPosDetail(line: CartLine) {
   };
 }
 
+/**
+ * Construit les données du reçu affiché/imprimé après une vente réussie.
+ * Les lignes viennent de `sale.details` (totaux serveur, source de vérité) — le nom du
+ * produit est récupéré depuis le snapshot local `cartLines` car l'API ne le renvoie pas.
+ */
 function buildReceipt(
   sale: Sale,
   cartLines: CartLine[],
@@ -768,7 +775,7 @@ export default function PosPage() {
             if (!open && panelState === 'checkout') setPanelState('cart');
           }}
         >
-          <SheetContent>
+          <SheetContent hideClose={panelState === 'awaiting-mobile-money' || panelState === 'mobile-money-expired'}>
             {panelState === 'checkout' && (
               <>
                 <SheetHeader>
@@ -862,7 +869,7 @@ export default function PosPage() {
                   <a
                     href={awaitingSale.paymentLink}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="text-[12.5px] text-brand-600 underline underline-offset-2"
                   >
                     Lien de paiement
