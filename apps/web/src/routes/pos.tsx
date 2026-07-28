@@ -11,7 +11,7 @@ import { Label } from '../components/ui/label';
 import { NativeSelect } from '../components/ui/native-select';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
-import { PageHeader, EmptyState, ErrorState } from '../components/page-states';
+import { EmptyState, ErrorState } from '../components/page-states';
 import { PosReceipt, type PosReceiptData, type PosReceiptPaymentMethod } from '../components/PosReceipt';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -248,7 +248,7 @@ function usePosSaleStatus(saleId: string | null) {
 
 function ProductGridSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="rounded-card border border-neutral-200 bg-white p-3">
           <Skeleton className="h-11 w-11 rounded-card" />
@@ -291,12 +291,12 @@ function ProductCard({
         <p className="truncate text-[13.5px] font-medium text-neutral-900">{product.name}</p>
         <p className="tabular text-[12px] text-neutral-500">{product.code}</p>
       </div>
-      <div className="flex w-full items-center justify-between">
-        <span className="tabular text-[13.5px] font-semibold text-neutral-900">{formatXAF(product.price)}</span>
+      <div className="flex w-full items-start justify-between gap-1.5">
+        <span className="tabular text-[13.5px] font-semibold leading-tight text-neutral-900">{formatXAF(product.price)}</span>
         {outOfStock ? (
-          <Badge variant="danger">Rupture</Badge>
+          <Badge variant="danger" className="flex-shrink-0">Rupture</Badge>
         ) : (
-          <Badge variant={qty <= 5 ? 'warning' : 'neutral'} className="tabular">
+          <Badge variant={qty <= 5 ? 'warning' : 'neutral'} className="tabular flex-shrink-0">
             {qty.toLocaleString('fr-CM', { maximumFractionDigits: 3 })}
           </Badge>
         )}
@@ -590,16 +590,14 @@ export default function PosPage() {
   const partial = products.length === SEARCH_RESULT_LIMIT;
 
   return (
-    <div className="flex flex-col lg:h-[calc(100vh-3.5rem)]">
-      <PageHeader title="Caisse" description="Vente rapide au comptoir." />
-
+    <div className="mx-auto flex w-full max-w-6xl flex-col p-4 sm:p-6 lg:h-[calc(100vh-3.5rem)] lg:p-8">
       {/*
         Sous lg : colonnes empilées, page qui défile normalement (comme le reste de
         l'app) — pas de hauteur figée ni de scroll interne, donc rien ne peut jamais
         écraser la liste du panier. À partir de lg : deux colonnes côte à côte, chacune
         avec son propre scroll interne borné par la hauteur du viewport.
       */}
-      <div className="flex flex-col gap-4 px-4 pb-4 sm:px-6 lg:min-h-0 lg:flex-1 lg:flex-row lg:px-8">
+      <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row">
         {/* ── Colonne gauche : entrepôt + recherche + grille ─────────────────── */}
         <div className="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:flex-1">
           <div className="flex flex-col gap-2.5 sm:flex-row">
@@ -660,7 +658,7 @@ export default function PosPage() {
 
             {warehouseId !== '' && !productsLoading && !productsError && products.length > 0 && (
               <>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4">
                   {products.map((p) => (
                     <ProductCard key={p.id} product={{ ...p, quantity: stockByProduct[p.id] ?? p.quantity }} disabled={panelState !== 'cart'} onAdd={addProductToCart} />
                   ))}
