@@ -590,12 +590,18 @@ export default function PosPage() {
   const partial = products.length === SEARCH_RESULT_LIMIT;
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="flex flex-col lg:h-[calc(100vh-3.5rem)]">
       <PageHeader title="Caisse" description="Vente rapide au comptoir." />
 
-      <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4 sm:px-6 lg:px-8">
+      {/*
+        Sous lg : colonnes empilées, page qui défile normalement (comme le reste de
+        l'app) — pas de hauteur figée ni de scroll interne, donc rien ne peut jamais
+        écraser la liste du panier. À partir de lg : deux colonnes côte à côte, chacune
+        avec son propre scroll interne borné par la hauteur du viewport.
+      */}
+      <div className="flex flex-col gap-4 px-4 pb-4 sm:px-6 lg:min-h-0 lg:flex-1 lg:flex-row lg:px-8">
         {/* ── Colonne gauche : entrepôt + recherche + grille ─────────────────── */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:flex-1">
           <div className="flex flex-col gap-2.5 sm:flex-row">
             <div className="sm:w-64">
               <Label htmlFor="pos-warehouse">Entrepôt *</Label>
@@ -629,7 +635,7 @@ export default function PosPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
             {warehouseId === '' && (
               <EmptyState
                 icon={Warehouse}
@@ -670,7 +676,7 @@ export default function PosPage() {
         </div>
 
         {/* ── Panneau panier persistant ────────────────────────────────────── */}
-        <div className="flex w-[380px] flex-shrink-0 flex-col rounded-card border border-neutral-200 bg-white shadow-1">
+        <div className="flex w-full flex-shrink-0 flex-col rounded-card border border-neutral-200 bg-white shadow-1 lg:h-full lg:min-h-0 lg:w-[380px]">
           <div className="rounded-t-card bg-brand-500 px-4 py-3.5 text-white">
             <p className="text-[11.5px] uppercase tracking-wide text-brand-100">Total</p>
             <p className="tabular text-[24px] font-semibold">{formatXAF(calculatedTotal?.grandTotal ?? '0')}</p>
@@ -678,9 +684,9 @@ export default function PosPage() {
 
           {panelState === 'cart' && (
             <>
-              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="p-3 lg:min-h-[220px] lg:flex-1 lg:overflow-y-auto">
                 {cart.length === 0 && (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 py-10 text-center">
+                  <div className="flex flex-col items-center justify-center gap-2 py-10 text-center lg:h-full">
                     <ShoppingCart className="h-8 w-8 text-neutral-300" strokeWidth={1.5} />
                     <p className="text-[13px] text-neutral-500">Panier vide — cliquez un produit ou scannez un article.</p>
                   </div>
@@ -800,7 +806,7 @@ export default function PosPage() {
           )}
 
           {panelState === 'receipt' && lastReceipt && (
-            <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
+            <div className="p-3.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
               <div className="mb-3 flex items-center gap-2 text-brand-700">
                 <CheckCircle2 className="h-5 w-5" />
                 <p className="text-[13.5px] font-medium">Vente encaissée avec succès.</p>
