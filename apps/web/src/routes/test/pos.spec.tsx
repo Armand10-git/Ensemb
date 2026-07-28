@@ -135,6 +135,12 @@ async function addProductAndWaitTotal() {
   await waitFor(() => expect(screen.getByText('5 000 XAF')).toBeInTheDocument());
 }
 
+/** Ouvre le Sheet de paiement ("Passer au paiement") — Client/Mode de paiement/Encaisser y vivent. */
+async function openCheckout() {
+  await userEvent.click(screen.getByTestId('checkout-button'));
+  await waitFor(() => expect(screen.getByTestId('pos-client-select')).toBeInTheDocument());
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('PosPage — Recherche produit', () => {
@@ -287,6 +293,7 @@ describe('PosPage — Validation CASH', () => {
   it('le bouton Encaisser est désactivé tant que le montant reçu est vide ou insuffisant, puis actif avec la monnaie correcte', async () => {
     setupDefaultMocks([makeProductA()]);
     await addProductAndWaitTotal();
+    await openCheckout();
 
     expect(screen.getByTestId('encaisser-button')).toBeDisabled();
 
@@ -351,6 +358,7 @@ describe('PosPage — Validation MOBILE_MONEY', () => {
     });
 
     await addProductAndWaitTotal();
+    await openCheckout();
     await userEvent.selectOptions(screen.getByTestId('pos-payment-method-select'), 'MOBILE_MONEY');
 
     await userEvent.click(screen.getByTestId('encaisser-button'));
@@ -411,6 +419,7 @@ describe('PosPage — Erreurs de création de vente', () => {
   async function prepareReadyToSubmit() {
     setupDefaultMocks([makeProductA()]);
     await addProductAndWaitTotal();
+    await openCheckout();
     await userEvent.type(screen.getByLabelText('Montant reçu'), '6000');
     await waitFor(() => expect(screen.getByTestId('encaisser-button')).not.toBeDisabled());
   }
