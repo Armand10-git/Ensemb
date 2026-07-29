@@ -22,6 +22,7 @@ import {
 import { NotificationService } from '../notifications/notification.service';
 import { PaymentSaleService } from '../sales/payment-sale.service';
 import { PaymentAggregatorService } from '../billing/payment-aggregator.service';
+import { CashSessionService } from '../cash-sessions/cash-session.service';
 import type { SaleResponse } from '../sales/sale.service';
 import type { CalculateTotalDto, CreatePosSaleDto, PosLineDto } from './dto/pos-sale.dto';
 
@@ -133,6 +134,11 @@ const DETAIL_SELECT = {
  *  - MOBILE_MONEY : status AWAITING_PAYMENT, stock déjà décrémenté (réservé), aucun
  *    PaymentSale créé — lien de paiement généré après la transaction, job d'expiration
  *    différé enfilé (queue pos-payment-expiration, §17 point V).
+ *  - Session de caisse obligatoire (S23b) : createSale() exige une session CashSession OPEN
+ *    pour (organizationId, userId, dto.warehouseId) — vérifiée et rattachée (cashSessionId)
+ *    DANS la même transaction Serializable que la création de la vente, via
+ *    CashSessionService.findOpenSessionInTransaction, pour éliminer tout TOCTOU avec une
+ *    clôture de session concurrente (§18.2).
  */
 @Injectable()
 export class PosService {
@@ -146,6 +152,7 @@ export class PosService {
     private readonly notificationService: NotificationService,
     private readonly paymentSaleService: PaymentSaleService,
     private readonly aggregator: PaymentAggregatorService,
+    private readonly cashSessionService: CashSessionService,
     private readonly config: ConfigService,
     @InjectQueue('pos-payment-expiration')
     private readonly expirationQueue: Queue<{ saleId: string; organizationId: string }>,
@@ -227,8 +234,14 @@ export class PosService {
    *  - MOBILE_MONEY : status AWAITING_PAYMENT, lien de paiement généré et job d'expiration
    *    enfilé APRÈS le commit (pas d'appel réseau à l'intérieur de la transaction).
    *
+   * Exige une session de caisse OPEN (§18.2, S23b) pour (organizationId, userId,
+   * dto.warehouseId) : recherchée via CashSessionService.findOpenSessionInTransaction juste
+   * après verifyWarehouseOwnership — dans la même transaction Serializable, donc sans TOCTOU
+   * possible avec une clôture concurrente — et rattachée à la vente créée (cashSessionId).
+   *
    * @throws NotFoundException / ForbiddenException si client/entrepôt/produit hors organisation.
-   * @throws BadRequestException si le stock est insuffisant, ou si amountReceived < grandTotal (CASH).
+   * @throws BadRequestException si le stock est insuffisant, si amountReceived < grandTotal (CASH),
+   *         ou si aucune session de caisse n'est ouverte pour cet entrepôt.
    * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
    */
   async createSale(
@@ -245,6 +258,24 @@ export class PosService {
         async (tx) => {
           await this.verifyClientOwnership(tx, dto.clientId, organizationId);
           await this.verifyWarehouseOwnership(tx, dto.warehouseId, organizationId);
+
+          // Session de caisse obligatoire (S23b) : vérifiée ici, juste après l'ownership de
+          // l'entrepôt (dont dépend la recherche) et avant verifyDetailsOwnership — échec
+          // rapide sur la précondition métier la moins coûteuse avant de valider chaque ligne
+          // produit/variante/unité. Même transaction Serializable que la création de la vente
+          // => pas de TOCTOU avec une clôture de session concurrente.
+          const cashSession = await this.cashSessionService.findOpenSessionInTransaction(
+            tx,
+            organizationId,
+            userId,
+            dto.warehouseId,
+          );
+          if (!cashSession) {
+            throw new BadRequestException(
+              "Aucune session de caisse ouverte pour cet entrepôt — ouvrez une session avant d'encaisser.",
+            );
+          }
+
           await this.verifyDetailsOwnership(tx, dto.details, organizationId);
 
           const grouped = await this.groupDetailsByProduct(tx, totals.details);
@@ -268,6 +299,7 @@ export class PosService {
               userId,
               clientId: dto.clientId,
               warehouseId: dto.warehouseId,
+              cashSessionId: cashSession.id,
               taxRate: new Decimal(dto.taxRate ?? '0'),
               taxAmount: totals.taxAmount,
               discount: totals.discount,

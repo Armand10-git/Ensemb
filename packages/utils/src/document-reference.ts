@@ -7,7 +7,8 @@ export type DocumentType =
   | 'PURCHASE_RETURN'
   | 'TRANSFER'
   | 'ADJUSTMENT'
-  | 'PAYMENT_SALE';
+  | 'PAYMENT_SALE'
+  | 'CASH_SESSION';
 
 const PREFIXES: Record<DocumentType, string> = {
   SALE: 'VTE',
@@ -18,6 +19,7 @@ const PREFIXES: Record<DocumentType, string> = {
   TRANSFER: 'TRF',
   ADJUSTMENT: 'AJT',
   PAYMENT_SALE: 'PAY',
+  CASH_SESSION: 'CS',
 };
 
 /**

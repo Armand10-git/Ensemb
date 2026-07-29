@@ -15,6 +15,8 @@ const PROD_ID   = 'prod0000-0000-0000-0000-000000000001';
 const SALE_ID   = 'sale0001-0000-0000-0000-000000000001';
 const PW_ID     = 'pw000001-0000-0000-0000-000000000001';
 const REF       = 'VTE-2026-000001';
+const CASH_SESSION_ID  = 'cs000001-0000-0000-0000-000000000001';
+const CASH_SESSION_REF = 'CS-2026-000001';
 
 function makeCreatedSale(overrides: Record<string, unknown> = {}) {
   return {
@@ -74,6 +76,7 @@ describe('PosService', () => {
   let productWarehouseService: { adjustStock: jest.Mock };
   let paymentSaleService: { createInTransaction: jest.Mock };
   let aggregator: { generatePaymentLink: jest.Mock; verifyWebhookSignature: jest.Mock };
+  let cashSessionService: { findOpenSessionInTransaction: jest.Mock };
   let config: { get: jest.Mock };
   let queue: { add: jest.Mock };
   const toEmit = jest.fn();
@@ -108,6 +111,14 @@ describe('PosService', () => {
     };
     const configMock = { get: jest.fn().mockReturnValue(undefined) };
     const queueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    // Session OPEN par défaut — les tests pré-existants (stock, paiement, mobile money) ne
+    // portent pas sur le gate de session (S23b) et doivent continuer à passer sans y penser ;
+    // les tests dédiés au gate ci-dessous surchargent cette valeur (mockResolvedValueOnce(null)).
+    const cashSessionMock = {
+      findOpenSessionInTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: CASH_SESSION_ID, reference: CASH_SESSION_REF }),
+    };
 
     service = new PosService(
       prismaMock as never,
@@ -117,6 +128,7 @@ describe('PosService', () => {
       notifMock as never,
       paymentMock as never,
       aggregatorMock as never,
+      cashSessionMock as never,
       configMock as never,
       queueMock as never,
     );
@@ -124,6 +136,7 @@ describe('PosService', () => {
     productWarehouseService = pwMock;
     paymentSaleService = paymentMock;
     aggregator = aggregatorMock;
+    cashSessionService = cashSessionMock;
     config = configMock;
     queue = queueMock;
   });
@@ -240,6 +253,38 @@ describe('PosService', () => {
       productWarehouseService.adjustStock.mockRejectedValue(new OptimisticLockException(PW_ID, 0, 1));
 
       await expect(service.createSale(ORG_A, USER_ID, baseDto())).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ─── createSale — session de caisse (S23b) ──────────────────────────────────
+
+  describe('createSale — session de caisse', () => {
+    it('aucune session OPEN pour cet entrepôt → BadRequestException, stock jamais décrémenté', async () => {
+      mockOwnershipOk();
+      mockStockOk('10', '8');
+      cashSessionService.findOpenSessionInTransaction.mockResolvedValueOnce(null);
+
+      await expect(service.createSale(ORG_A, USER_ID, baseDto())).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+      expect(prisma.sale.create).not.toHaveBeenCalled();
+    });
+
+    it('session OPEN trouvée → recherchée pour (organizationId, userId, warehouseId) et rattachée à la vente créée', async () => {
+      mockOwnershipOk();
+      mockStockOk('10', '8');
+      prisma.sale.create.mockResolvedValue(makeCreatedSale());
+      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeCreatedSale());
+
+      await service.createSale(ORG_A, USER_ID, baseDto());
+
+      expect(cashSessionService.findOpenSessionInTransaction).toHaveBeenCalledWith(
+        expect.anything(),
+        ORG_A,
+        USER_ID,
+        WH_ID,
+      );
+      const createArgs = prisma.sale.create.mock.calls[0][0] as { data: { cashSessionId: string } };
+      expect(createArgs.data.cashSessionId).toBe(CASH_SESSION_ID);
     });
   });
 

@@ -42,6 +42,7 @@ let token: string;
 let clientId: string;
 let warehouseId: string;
 let productId: string;
+let userId: string;
 
 beforeAll(async () => {
   const org = await prisma.organization.create({ data: { name: 'E2E POS Webhook', subdomain: ORG_SUBDOMAIN } });
@@ -65,6 +66,7 @@ beforeAll(async () => {
     },
   });
   await prisma.roleOnUser.create({ data: { userId: user.id, roleId: role.id } });
+  userId = user.id;
 
   const cat = await prisma.category.create({
     data: { organizationId: orgId, code: `CAT-POSWH-${SUFFIX}`, name: 'Cat POS Webhook' },
@@ -95,6 +97,18 @@ beforeAll(async () => {
 
   await prisma.productWarehouse.create({
     data: { productId, warehouseId, quantity: new Decimal('100'), version: 0 },
+  });
+
+  // S23b — PosService.createSale() exige une session de caisse OPEN pour (org, user, warehouse).
+  await prisma.cashSession.create({
+    data: {
+      organizationId: orgId,
+      reference: `CS-E2E-WH-${SUFFIX}`,
+      warehouseId,
+      userId,
+      openingAmount: new Decimal('0'),
+      status: 'OPEN',
+    },
   });
 
   const moduleRef: TestingModule = await Test.createTestingModule({
@@ -141,6 +155,7 @@ afterAll(async () => {
   await prisma.paymentSale.deleteMany({ where: { organizationId: orgId } });
   await prisma.saleDetail.deleteMany({ where: { sale: { organizationId: orgId } } });
   await prisma.sale.deleteMany({ where: { organizationId: orgId } });
+  await prisma.cashSession.deleteMany({ where: { organizationId: orgId } });
   await prisma.client.deleteMany({ where: { organizationId: orgId } });
   await prisma.productWarehouse.deleteMany({ where: { productId } });
   await prisma.product.deleteMany({ where: { organizationId: orgId } });

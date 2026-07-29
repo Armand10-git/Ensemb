@@ -101,6 +101,11 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Point de vente
   { name: 'pos.access', label: 'Accéder à la caisse (POS)' },
 
+  // Session de caisse
+  { name: 'cashsessions.view', label: 'Voir les sessions de caisse' },
+  { name: 'cashsessions.open', label: 'Ouvrir une session de caisse' },
+  { name: 'cashsessions.close', label: 'Clôturer une session de caisse' },
+
   // Achats
   { name: 'purchases.view', label: 'Voir les achats' },
   { name: 'purchases.create', label: 'Créer un achat' },

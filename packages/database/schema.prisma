@@ -104,7 +104,7 @@ model Subscription {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
-  invoices          Invoice[]
+  invoices Invoice[]
 
   @@index([planId])
   @@map("subscriptions")
@@ -112,23 +112,23 @@ model Subscription {
 
 /// Facture générée pour une période d'abonnement. Persist avant activation.
 model Invoice {
-  id             String        @id @default(uuid()) @db.Uuid
-  organizationId String        @db.Uuid
-  subscriptionId String        @db.Uuid
-  amount         Decimal       @db.Decimal(10, 2)
-  currency       String        @default("XAF")
-  status         InvoiceStatus @default(PENDING)
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  subscriptionId String         @db.Uuid
+  amount         Decimal        @db.Decimal(10, 2)
+  currency       String         @default("XAF")
+  status         InvoiceStatus  @default(PENDING)
   /// URL de paiement générée par l'agrégateur
   paymentLink    String?
   paidAt         DateTime?
   dueAt          DateTime
   /// "monthly" | "annual" — conservé pour la relance automatique (invoice.renew)
-  period         String        @default("monthly")
-  organization   Organization  @relation(fields: [organizationId], references: [id])
-  subscription   Subscription  @relation(fields: [subscriptionId], references: [id])
+  period         String         @default("monthly")
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  subscription   Subscription   @relation(fields: [subscriptionId], references: [id])
   webhookEvents  WebhookEvent[]
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   @@index([organizationId, status])
   @@map("invoices")
@@ -169,14 +169,14 @@ model PlatformSetting {
 
 /// Organisation cliente (tenant). Chaque modèle métier est scopé par organizationId.
 model Organization {
-  id           String             @id @default(uuid()) @db.Uuid
-  name         String
+  id                String             @id @default(uuid()) @db.Uuid
+  name              String
   /// Sous-domaine unique : boutique-durand → boutique-durand.monapp.com
-  subdomain    String             @unique
-  customDomain String?            @unique
-  logoUrl      String?
+  subdomain         String             @unique
+  customDomain      String?            @unique
+  logoUrl           String?
   /// Couleur principale HSL/hex appliquée au runtime (design system §3)
-  primaryColor String?
+  primaryColor      String?
   status            OrganizationStatus @default(TRIALING)
   /// Date de fin d'essai calculée à l'inscription. Null pour les orgs antérieures à T04.
   /// Logique fenêtre de lancement différée à T06 (PlatformSetting.launchPromoEndsAt).
@@ -184,9 +184,9 @@ model Organization {
   /// Raison d'une fin d'essai anticipée (ex. dépassement CA). Alimenté par billing-queue (T06/T07).
   trialEndedReason  String?
   /// Devise par défaut choisie par l'organisation (lecture seule pour les tenants non-admin).
-  defaultCurrencyId String?   @db.Uuid
-  defaultCurrency   Currency? @relation(fields: [defaultCurrencyId], references: [id])
-  createdAt         DateTime  @default(now())
+  defaultCurrencyId String?            @db.Uuid
+  defaultCurrency   Currency?          @relation(fields: [defaultCurrencyId], references: [id])
+  createdAt         DateTime           @default(now())
   deletedAt         DateTime?
 
   users            User[]
@@ -208,6 +208,7 @@ model Organization {
   notifications    Notification[]
   sales            Sale[]
   paymentSales     PaymentSale[]
+  cashSessions     CashSession[]
 
   @@map("organizations")
 }
@@ -282,14 +283,15 @@ model User {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  organization  Organization   @relation(fields: [organizationId], references: [id])
-  roles         RoleOnUser[]
-  adjustments   Adjustment[]
-  transfers     StockTransfer[]
-  notifications Notification[]
-  sales         Sale[]
-  cancelledSales Sale[]        @relation("SaleCancelledBy")
-  paymentSales  PaymentSale[]
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  roles          RoleOnUser[]
+  adjustments    Adjustment[]
+  transfers      StockTransfer[]
+  notifications  Notification[]
+  sales          Sale[]
+  cancelledSales Sale[]          @relation("SaleCancelledBy")
+  paymentSales   PaymentSale[]
+  cashSessions   CashSession[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -300,15 +302,15 @@ model User {
 
 /// Rôle nommé, scopé par organisation.
 model Role {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
   name           String
   label          String?
   description    String?
   /// false = rôle désactivé
-  status         Boolean  @default(true)
+  status         Boolean @default(true)
 
-  organization Organization      @relation(fields: [organizationId], references: [id])
+  organization Organization       @relation(fields: [organizationId], references: [id])
   permissions  PermissionOnRole[]
   users        RoleOnUser[]
 
@@ -345,10 +347,10 @@ model PermissionOnRole {
 model AuditLog {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String?  @db.Uuid
-  actorType      String                            // "USER" | "PLATFORM_ADMIN" | "SYSTEM"
+  actorType      String // "USER" | "PLATFORM_ADMIN" | "SYSTEM"
   actorId        String?  @db.Uuid
-  action         String                            // ex. "roles.update", "permissions.assign"
-  entity         String                            // nom du modèle, ex. "Role"
+  action         String // ex. "roles.update", "permissions.assign"
+  entity         String // nom du modèle, ex. "Role"
   entityId       String?  @db.Uuid
   before         Json?
   after          Json?
@@ -404,23 +406,24 @@ model BackupExport {
 /// L'index unique partiel (organizationId, name) WHERE deleted_at IS NULL est créé
 /// en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
 model Warehouse {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
   name           String
   address        String?
   /// true = entrepôt par défaut de l'organisation (un seul par org, géré transactionnellement)
-  isDefault      Boolean      @default(false)
+  isDefault      Boolean            @default(false)
   /// Compteur de version pour le verrouillage optimiste sur les mouvements de stock (S15)
-  version        Int          @default(0)
+  version        Int                @default(0)
   deletedAt      DateTime?
-  organization    Organization      @relation(fields: [organizationId], references: [id])
-  stocks          ProductWarehouse[]
-  adjustments     Adjustment[]
-  transfersFrom   StockTransfer[]   @relation("TransferFrom")
-  transfersTo     StockTransfer[]   @relation("TransferTo")
-  sales           Sale[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  stocks         ProductWarehouse[]
+  adjustments    Adjustment[]
+  transfersFrom  StockTransfer[]    @relation("TransferFrom")
+  transfersTo    StockTransfer[]    @relation("TransferTo")
+  sales          Sale[]
+  cashSessions   CashSession[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   @@index([organizationId])
   @@map("warehouses")
@@ -470,52 +473,52 @@ model Brand {
 /// Soft delete : index unique partiel (organizationId, name) WHERE deleted_at IS NULL en SQL raw.
 /// Un produit isVariant: true a des ProductVariant ; le stock réel est dans ProductWarehouse (S15).
 model Product {
-  id              String    @id @default(uuid()) @db.Uuid
-  organizationId  String    @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
   /// Code de référence interne — unique par organisation (actifs)
-  code            String
+  code           String
   /// Format du code-barres affiché côté client (ex. "EAN13", "CODE128", "QR")
-  barcodeType     String?
-  name            String
+  barcodeType    String?
+  name           String
   /// Prix d'achat HT — Decimal obligatoire (§17 point A)
-  cost            Decimal   @db.Decimal(14, 3)
+  cost           Decimal   @db.Decimal(14, 3)
   /// Prix de vente HT — Decimal obligatoire (§17 point A)
-  price           Decimal   @db.Decimal(14, 3)
-  categoryId      String    @db.Uuid
-  brandId         String?   @db.Uuid
+  price          Decimal   @db.Decimal(14, 3)
+  categoryId     String    @db.Uuid
+  brandId        String?   @db.Uuid
   /// Unité de stock par défaut (ex. "Pièce")
-  unitId          String?   @db.Uuid
+  unitId         String?   @db.Uuid
   /// Unité de vente (ex. "Carton") — peut différer de l'unité de stock
-  unitSaleId      String?   @db.Uuid
+  unitSaleId     String?   @db.Uuid
   /// Unité d'achat (ex. "Carton") — peut différer de l'unité de stock
-  unitPurchaseId  String?   @db.Uuid
+  unitPurchaseId String?   @db.Uuid
   /// Taux de TVA — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
-  taxRate         Decimal   @default(0) @db.Decimal(5, 4)
+  taxRate        Decimal   @default(0) @db.Decimal(5, 4)
   /// "percentage" | "fixed"
-  taxMethod       String    @default("percentage")
+  taxMethod      String    @default("percentage")
   /// Clé S3 de l'image produit — jamais URL directe (§17 point Y)
-  image           String?
-  note            String?
+  image          String?
+  note           String?
   /// Seuil d'alerte de stock bas (entier, 0 = désactivé)
-  stockAlert      Int       @default(0)
+  stockAlert     Int       @default(0)
   /// true = produit avec variantes (tailles, couleurs…)
-  isVariant       Boolean   @default(false)
-  isActive        Boolean   @default(true)
-  deletedAt       DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  isVariant      Boolean   @default(false)
+  isActive       Boolean   @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  organization   Organization     @relation(fields: [organizationId], references: [id])
-  category       Category         @relation(fields: [categoryId], references: [id])
-  brand          Brand?           @relation(fields: [brandId], references: [id])
-  unit           Unit?            @relation("ProductUnit", fields: [unitId], references: [id])
-  unitSale       Unit?            @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
-  unitPurchase   Unit?            @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
-  variants           ProductVariant[]
-  stocks             ProductWarehouse[]
-  adjustmentDetails  AdjustmentDetail[]
-  transferDetails    StockTransferDetail[]
-  saleDetails        SaleDetail[]
+  organization      Organization          @relation(fields: [organizationId], references: [id])
+  category          Category              @relation(fields: [categoryId], references: [id])
+  brand             Brand?                @relation(fields: [brandId], references: [id])
+  unit              Unit?                 @relation("ProductUnit", fields: [unitId], references: [id])
+  unitSale          Unit?                 @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
+  unitPurchase      Unit?                 @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
+  variants          ProductVariant[]
+  stocks            ProductWarehouse[]
+  adjustmentDetails AdjustmentDetail[]
+  transferDetails   StockTransferDetail[]
+  saleDetails       SaleDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -531,7 +534,7 @@ model ProductVariant {
   name      String?
   deletedAt DateTime?
 
-  product Product          @relation(fields: [productId], references: [id])
+  product Product            @relation(fields: [productId], references: [id])
   stocks  ProductWarehouse[]
 
   @@map("product_variants")
@@ -541,14 +544,14 @@ model ProductVariant {
 /// version Int : verrouillage optimiste pour tout mouvement de stock (§17 point B).
 /// quantity Decimal — jamais Float (§17 point A).
 model ProductWarehouse {
-  id               String         @id @default(uuid()) @db.Uuid
-  productId        String         @db.Uuid
-  warehouseId      String         @db.Uuid
-  productVariantId String?        @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  productId        String  @db.Uuid
+  warehouseId      String  @db.Uuid
+  productVariantId String? @db.Uuid
   /// Quantité en stock — Decimal obligatoire (§17 point A)
-  quantity         Decimal        @default(0) @db.Decimal(14, 3)
+  quantity         Decimal @default(0) @db.Decimal(14, 3)
   /// Compteur de version pour le verrouillage optimiste (S15, §17 point B)
-  version          Int            @default(0)
+  version          Int     @default(0)
 
   product   Product         @relation(fields: [productId], references: [id])
   warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
@@ -568,28 +571,28 @@ model ProductWarehouse {
 /// Soft delete : index uniques partiels (organizationId, name) et (organizationId, shortName)
 /// créés en SQL raw dans la migration (WHERE deleted_at IS NULL).
 model Unit {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
+  id               String       @id @default(uuid()) @db.Uuid
+  organizationId   String       @db.Uuid
   /// Libellé complet : "Pièce", "Carton", "Litre"
-  name           String
+  name             String
   /// Nom court affiché : "pcs", "ctn", "L"
-  shortName      String
+  shortName        String
   /// Null = unité de base ; non nul = unité dérivée (1 niveau max)
-  baseUnitId     String?   @db.Uuid
-  baseUnit       Unit?     @relation("UnitHierarchy", fields: [baseUnitId], references: [id])
-  subUnits       Unit[]    @relation("UnitHierarchy")
+  baseUnitId       String?      @db.Uuid
+  baseUnit         Unit?        @relation("UnitHierarchy", fields: [baseUnitId], references: [id])
+  subUnits         Unit[]       @relation("UnitHierarchy")
   /// Opérateur de conversion : "*" (multiplication) ou "/" (division)
-  operator       String    @default("*")
+  operator         String       @default("*")
   /// Facteur de conversion — Decimal obligatoire (§17 point A)
-  operatorValue  Decimal   @default(1) @db.Decimal(14, 6)
-  deletedAt      DateTime?
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  operatorValue    Decimal      @default(1) @db.Decimal(14, 6)
+  deletedAt        DateTime?
+  organization     Organization @relation(fields: [organizationId], references: [id])
   /// Produits référençant cette unité (stub S11 — colonnes complètes en S14)
-  products         Product[] @relation("ProductUnit")
-  productsSale     Product[] @relation("ProductUnitSale")
-  productsPurchase Product[] @relation("ProductUnitPurchase")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  products         Product[]    @relation("ProductUnit")
+  productsSale     Product[]    @relation("ProductUnitSale")
+  productsPurchase Product[]    @relation("ProductUnitPurchase")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@map("units")
 }
@@ -602,8 +605,8 @@ model Unit {
 /// créés en SQL raw dans la migration (WHERE deleted_at IS NULL).
 /// Le client "Walk-in" (code=1) est le client anonyme du POS — seedé automatiquement.
 model Client {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
   name           String
   /// Code séquentiel par organisation — généré transactionnellement, jamais saisi par l'utilisateur
   code           Int
@@ -615,8 +618,8 @@ model Client {
   deletedAt      DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
   sales          Sale[]
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   /// Contrainte de sécurité : le filet final en cas de collision concurrente sur le code
   @@unique([organizationId, code])
@@ -626,8 +629,8 @@ model Client {
 /// Fournisseur d'un tenant (S12 — Bloc C).
 /// Même structure que Client — code séquentiel distinct par organisation.
 model Provider {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
   name           String
   /// Code séquentiel par organisation — généré transactionnellement, jamais saisi par l'utilisateur
   code           Int
@@ -638,8 +641,8 @@ model Provider {
   address        String?
   deletedAt      DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   @@unique([organizationId, code])
   @@map("providers")
@@ -658,6 +661,8 @@ enum DocumentType {
   ADJUSTMENT
   /// Paiement d'une vente (S20) — séquence globale par organisation, indépendante de Sale.
   PAYMENT_SALE
+  /// Session de caisse (S23b) — préfixe CS
+  CASH_SESSION
 }
 
 /// Compteur de référence par (organisation, type de document, année civile).
@@ -709,7 +714,7 @@ model Adjustment {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  organization Organization      @relation(fields: [organizationId], references: [id])
+  organization Organization       @relation(fields: [organizationId], references: [id])
   warehouse    Warehouse          @relation(fields: [warehouseId], references: [id])
   user         User               @relation(fields: [userId], references: [id])
   details      AdjustmentDetail[]
@@ -733,8 +738,8 @@ model AdjustmentDetail {
   /// Coût unitaire pour valorisation — Decimal obligatoire (§17 point A)
   unitCost         Decimal              @default(0) @db.Decimal(14, 3)
 
-  adjustment Adjustment     @relation(fields: [adjustmentId], references: [id])
-  product    Product        @relation(fields: [productId], references: [id])
+  adjustment Adjustment @relation(fields: [adjustmentId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
 
   @@map("adjustment_details")
 }
@@ -769,10 +774,10 @@ model StockTransfer {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  organization  Organization        @relation(fields: [organizationId], references: [id])
-  fromWarehouse Warehouse           @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
-  toWarehouse   Warehouse           @relation("TransferTo", fields: [toWarehouseId], references: [id])
-  user          User                @relation(fields: [userId], references: [id])
+  organization  Organization          @relation(fields: [organizationId], references: [id])
+  fromWarehouse Warehouse             @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse             @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  user          User                  @relation(fields: [userId], references: [id])
   details       StockTransferDetail[]
 
   @@unique([organizationId, reference])
@@ -784,15 +789,15 @@ model StockTransfer {
 /// quantity en Decimal — jamais Float (§17 point A).
 /// L'organizationId n'est pas répété ici — hérité via transfer.organizationId.
 model StockTransferDetail {
-  id               String        @id @default(uuid()) @db.Uuid
-  transferId       String        @db.Uuid
-  productId        String        @db.Uuid
-  productVariantId String?       @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  transferId       String  @db.Uuid
+  productId        String  @db.Uuid
+  productVariantId String? @db.Uuid
   /// Quantité transférée — Decimal obligatoire (§17 point A), toujours positive
-  quantity         Decimal       @db.Decimal(14, 3)
+  quantity         Decimal @db.Decimal(14, 3)
 
-  transfer StockTransfer  @relation(fields: [transferId], references: [id])
-  product  Product        @relation(fields: [productId], references: [id])
+  transfer StockTransfer @relation(fields: [transferId], references: [id])
+  product  Product       @relation(fields: [productId], references: [id])
 
   @@map("stock_transfer_details")
 }
@@ -866,6 +871,8 @@ model Sale {
   userId         String         @db.Uuid
   clientId       String         @db.Uuid
   warehouseId    String         @db.Uuid
+  /// Session de caisse ouverte au moment de l'encaissement (S23b) — null pour une vente hors-POS
+  cashSessionId  String?        @db.Uuid
   /// Taux de TVA global — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
   taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
   /// Montant de TVA global si taxMethod global = "fixed"
@@ -888,13 +895,14 @@ model Sale {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  organization Organization  @relation(fields: [organizationId], references: [id])
-  client       Client        @relation(fields: [clientId], references: [id])
-  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
-  user         User          @relation(fields: [userId], references: [id])
-  cancelledBy  User?         @relation("SaleCancelledBy", fields: [cancelledById], references: [id])
-  details      SaleDetail[]
-  payments     PaymentSale[]
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  client        Client         @relation(fields: [clientId], references: [id])
+  warehouse     Warehouse      @relation(fields: [warehouseId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
+  cancelledBy   User?          @relation("SaleCancelledBy", fields: [cancelledById], references: [id])
+  cashSession   CashSession?   @relation(fields: [cashSessionId], references: [id])
+  details       SaleDetail[]
+  payments      PaymentSale[]
   webhookEvents WebhookEvent[]
 
   @@unique([organizationId, reference])
@@ -904,6 +912,7 @@ model Sale {
   @@index([organizationId, userId])
   @@index([organizationId, clientId])
   @@index([organizationId, warehouseId])
+  @@index([organizationId, cashSessionId])
   @@map("sales")
 }
 
@@ -975,4 +984,38 @@ model PaymentSale {
 
   @@index([organizationId, saleId])
   @@map("payment_sales")
+}
+
+/// Session de caisse (S23b, §18.2) : ouverture/clôture avec fond de caisse et écart de comptage.
+/// "Chacun sa caisse" : une seule session OPEN par (organizationId, userId) — index unique partiel
+/// créé en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
+/// status en String "OPEN"/"CLOSED" (pas d'enum Prisma dédié) — volontairement simple.
+model CashSession {
+  id                    String    @id @default(uuid()) @db.Uuid
+  organizationId        String    @db.Uuid
+  /// Référence via DocumentCounterService — jamais max+1 (§17 point X)
+  reference             String
+  warehouseId           String    @db.Uuid
+  userId                String    @db.Uuid
+  /// Fond de caisse déclaré à l'ouverture
+  openingAmount         Decimal   @db.Decimal(14, 3)
+  /// Calculé à la clôture : openingAmount + somme des PaymentSale CASH rattachés
+  expectedClosingAmount Decimal?  @db.Decimal(14, 3)
+  /// Saisi par le caissier au comptage physique
+  countedClosingAmount  Decimal?  @db.Decimal(14, 3)
+  /// countedClosingAmount - expectedClosingAmount (positif = excédent, négatif = manque)
+  variance              Decimal?  @db.Decimal(14, 3)
+  status                String    @default("OPEN")
+  notes                 String?
+  openedAt              DateTime  @default(now())
+  closedAt              DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  sales        Sale[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, userId, status])
+  @@map("cash_sessions")
 }

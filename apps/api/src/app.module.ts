@@ -26,6 +26,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { NotificationModule } from './modules/notifications/notification.module';
 import { SalesModule } from './modules/sales/sale.module';
+import { CashSessionModule } from './modules/cash-sessions/cash-session.module';
 import { PosModule } from './modules/pos/pos.module';
 
 @Module({
@@ -64,6 +65,7 @@ import { PosModule } from './modules/pos/pos.module';
     InventoryModule,
     NotificationModule,
     SalesModule,
+    CashSessionModule,
     PosModule,
   ],
 })
