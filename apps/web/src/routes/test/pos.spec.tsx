@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import PosPage from '../pos';
+import PosPage, { fractionToPercentString } from '../pos';
 import { Toaster } from '../../components/ui/sonner';
 
 // ─── Mock API ─────────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ const CLIENT_OTHER_ID  = 'cli00002-0000-0000-0000-000000000002';
 const PROD_A_ID = 'prod0001-0000-0000-0000-000000000001';
 const PROD_B_ID = 'prod0002-0000-0000-0000-000000000002';
 const SALE_ID   = 'sale0001-0000-0000-0000-000000000001';
+const CASH_SESSION_ID = 'cs000001-0000-0000-0000-000000000001';
 
 const warehouseResp = { data: [{ id: WAREHOUSE_ID, name: 'Entrepôt Principal' }], total: 1, page: 1, limit: 200 };
 
@@ -83,8 +84,6 @@ const calcTotalResp = {
 };
 
 const emptyPaginated = { data: [], total: 0, page: 1, limit: 20 };
-
-const CASH_SESSION_ID = 'cs000001-0000-0000-0000-000000000001';
 
 /**
  * Session de caisse OPEN par défaut — la plupart des tests exercent le panier avec une
@@ -187,7 +186,31 @@ async function addProductAndWaitTotal() {
   await waitFor(() => expect(screen.getByText('5 000 XAF')).toBeInTheDocument());
 }
 
+/** Ouvre le Sheet de paiement ("Passer au paiement") — Client/Mode de paiement/Encaisser y vivent. */
+async function openCheckout() {
+  await userEvent.click(screen.getByTestId('checkout-button'));
+  await waitFor(() => expect(screen.getByTestId('pos-client-select')).toBeInTheDocument());
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe('fractionToPercentString', () => {
+  it('convertit une fraction en pourcentage direct (0.1925 → 19.25)', () => {
+    expect(fractionToPercentString('0.1925')).toBe('19.25');
+  });
+
+  it('gère la fraction nulle (produit non taxé)', () => {
+    expect(fractionToPercentString('0')).toBe('0');
+  });
+
+  it('gère une fraction représentant 100% (1 → 100)', () => {
+    expect(fractionToPercentString('1')).toBe('100');
+  });
+
+  it('arrondit à 3 décimales pour rester compatible avec le regex serveur (\\d+(\\.\\d{1,3})?)', () => {
+    expect(fractionToPercentString('0.123456')).toBe('12.346');
+  });
+});
 
 describe('PosPage — Recherche produit', () => {
   beforeEach(() => {
@@ -340,6 +363,7 @@ describe('PosPage — Validation CASH', () => {
   it('le bouton Encaisser est désactivé tant que le montant reçu est vide ou insuffisant, puis actif avec la monnaie correcte', async () => {
     setupDefaultMocks([makeProductA()]);
     await addProductAndWaitTotal();
+    await openCheckout();
 
     expect(screen.getByTestId('encaisser-button')).toBeDisabled();
 
@@ -405,6 +429,7 @@ describe('PosPage — Validation MOBILE_MONEY', () => {
     });
 
     await addProductAndWaitTotal();
+    await openCheckout();
     await userEvent.selectOptions(screen.getByTestId('pos-payment-method-select'), 'MOBILE_MONEY');
 
     await userEvent.click(screen.getByTestId('encaisser-button'));
@@ -465,6 +490,7 @@ describe('PosPage — Erreurs de création de vente', () => {
   async function prepareReadyToSubmit() {
     setupDefaultMocks([makeProductA()]);
     await addProductAndWaitTotal();
+    await openCheckout();
     await userEvent.type(screen.getByLabelText('Montant reçu'), '6000');
     await waitFor(() => expect(screen.getByTestId('encaisser-button')).not.toBeDisabled());
   }
@@ -518,7 +544,7 @@ describe('PosPage — Session de caisse (S23b)', () => {
     );
     expect(screen.getByTestId('opening-amount-input')).toBeInTheDocument();
     expect(screen.queryByTestId('product-card-PROD-001')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('encaisser-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('checkout-button')).not.toBeInTheDocument();
   });
 
   it('ouvre une session via le formulaire puis affiche la grille produits et le bandeau de session', async () => {
@@ -569,5 +595,13 @@ describe('PosPage — Session de caisse (S23b)', () => {
 
     await waitFor(() => expect(screen.getByTestId('close-session-summary')).toBeInTheDocument());
     expect(screen.getByText(/Manque/)).toBeInTheDocument();
+  });
+
+  it('le bouton "Clôturer la caisse" est désactivé pendant le paiement (Sheet ouvert)', async () => {
+    setupDefaultMocks([makeProductA()]);
+    await addProductAndWaitTotal();
+    await openCheckout();
+
+    expect(screen.getByTestId('close-session-button')).toBeDisabled();
   });
 });

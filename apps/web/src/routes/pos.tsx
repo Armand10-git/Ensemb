@@ -11,6 +11,9 @@ import { Label } from '../components/ui/label';
 import { NativeSelect } from '../components/ui/native-select';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
+import { EmptyState, ErrorState } from '../components/page-states';
+import { PosReceipt, type PosReceiptData, type PosReceiptPaymentMethod } from '../components/PosReceipt';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '../components/ui/sheet';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -21,8 +24,6 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '../components/ui/alert-dialog';
-import { PageHeader, EmptyState, ErrorState } from '../components/page-states';
-import { PosReceipt, type PosReceiptData, type PosReceiptPaymentMethod } from '../components/PosReceipt';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -99,7 +100,13 @@ interface CartLine {
 }
 
 type PaymentMethod = 'CASH' | 'CARD' | 'MOBILE_MONEY';
-type PanelState = 'cart' | 'awaiting-mobile-money' | 'receipt' | 'mobile-money-expired';
+/**
+ * 'cart' : panier éditable, Sheet de paiement fermé.
+ * 'checkout' : Sheet ouvert, formulaire Client/Mode de paiement/Encaisser.
+ * 'awaiting-mobile-money' / 'mobile-money-expired' : Sheet ouvert, contenu de suivi du paiement.
+ * 'receipt' : Sheet fermé, reçu affiché à la place du panier.
+ */
+type PanelState = 'cart' | 'checkout' | 'awaiting-mobile-money' | 'receipt' | 'mobile-money-expired';
 
 /**
  * Session de caisse (S23b) — ouverture/clôture avec fond de caisse et écart. Tous les
@@ -144,11 +151,12 @@ function useDebounce<T>(value: T, delay: number): T {
  * divisé par 100 côté serveur — pos.service.ts computeLineTotal). Conversion nécessaire
  * pour que le panier applique le taux de TVA du produit sans le fausser d'un facteur 100.
  */
-function fractionToPercentString(fraction: string): string {
+export function fractionToPercentString(fraction: string): string {
   const pct = Number(fraction) * 100;
   return String(Number(pct.toFixed(3)));
 }
 
+/** Construit une ligne panier à partir d'un résultat de recherche — snapshot figé pour l'affichage. */
 function productToCartLine(product: ProductSearchResult): CartLine {
   return {
     productId: product.id,
@@ -161,6 +169,7 @@ function productToCartLine(product: ProductSearchResult): CartLine {
   };
 }
 
+/** Convertit une ligne panier au format PosLineDto attendu par calculate-total et pos/sales. */
 function cartLineToPosDetail(line: CartLine) {
   return {
     productId: line.productId,
@@ -173,6 +182,11 @@ function cartLineToPosDetail(line: CartLine) {
   };
 }
 
+/**
+ * Construit les données du reçu affiché/imprimé après une vente réussie.
+ * Les lignes viennent de `sale.details` (totaux serveur, source de vérité) — le nom du
+ * produit est récupéré depuis le snapshot local `cartLines` car l'API ne le renvoie pas.
+ */
 function buildReceipt(
   sale: Sale,
   cartLines: CartLine[],
@@ -319,7 +333,7 @@ function usePosSaleStatus(saleId: string | null) {
 
 function ProductGridSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="rounded-card border border-neutral-200 bg-white p-3">
           <Skeleton className="h-11 w-11 rounded-card" />
@@ -362,12 +376,12 @@ function ProductCard({
         <p className="truncate text-[13.5px] font-medium text-neutral-900">{product.name}</p>
         <p className="tabular text-[12px] text-neutral-500">{product.code}</p>
       </div>
-      <div className="flex w-full items-center justify-between">
-        <span className="tabular text-[13.5px] font-semibold text-neutral-900">{formatXAF(product.price)}</span>
+      <div className="flex w-full items-start justify-between gap-1.5">
+        <span className="tabular whitespace-nowrap text-[13.5px] font-semibold leading-tight text-neutral-900">{formatXAF(product.price)}</span>
         {outOfStock ? (
-          <Badge variant="danger">Rupture</Badge>
+          <Badge variant="danger" className="flex-shrink-0">Rupture</Badge>
         ) : (
-          <Badge variant={qty <= 5 ? 'warning' : 'neutral'} className="tabular">
+          <Badge variant={qty <= 5 ? 'warning' : 'neutral'} className="tabular flex-shrink-0">
             {qty.toLocaleString('fr-CM', { maximumFractionDigits: 3 })}
           </Badge>
         )}
@@ -382,12 +396,14 @@ function CartLineRow({
   line,
   insufficient,
   liveQuantity,
+  locked,
   onQuantityChange,
   onRemove,
 }: {
   line: CartLine;
   insufficient: boolean;
   liveQuantity: number | undefined;
+  locked: boolean;
   onQuantityChange: (productId: string, value: string) => void;
   onRemove: (productId: string) => void;
 }) {
@@ -402,8 +418,9 @@ function CartLineRow({
         <button
           type="button"
           aria-label={`Retirer ${line.name}`}
+          disabled={locked}
           onClick={() => onRemove(line.productId)}
-          className="flex-shrink-0 rounded-field p-1 text-danger-600 hover:bg-danger-50"
+          className="flex-shrink-0 rounded-field p-1 text-danger-600 hover:bg-danger-50 disabled:pointer-events-none disabled:opacity-40"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -414,6 +431,7 @@ function CartLineRow({
           inputMode="decimal"
           aria-label={`Quantité — ${line.name}`}
           value={line.quantity}
+          disabled={locked}
           onChange={(e) => onQuantityChange(line.productId, e.target.value)}
           className="h-8 w-20 text-center"
         />
@@ -446,9 +464,18 @@ function VarianceBadge({ variance }: { variance: string | null }) {
 /**
  * Bandeau permanent affiché au-dessus de la grille/panier tant qu'une session de caisse est
  * ouverte pour l'entrepôt sélectionné — référence, heure d'ouverture, fond de caisse, action
- * de clôture (§10 « session de caisse » de standards.md).
+ * de clôture (§10 « session de caisse » de standards.md). Le bouton de clôture est désactivé
+ * en dehors de l'état 'cart' : on ne clôture pas la caisse en plein paiement.
  */
-function CashSessionBanner({ session, onRequestClose }: { session: CashSessionResponse; onRequestClose: () => void }) {
+function CashSessionBanner({
+  session,
+  disabled,
+  onRequestClose,
+}: {
+  session: CashSessionResponse;
+  disabled: boolean;
+  onRequestClose: () => void;
+}) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-neutral-200 bg-white px-4 py-2.5 shadow-1">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
@@ -466,7 +493,7 @@ function CashSessionBanner({ session, onRequestClose }: { session: CashSessionRe
           <span className="tabular text-neutral-800">{formatXAF(session.openingAmount)}</span>
         </div>
       </div>
-      <Button data-testid="close-session-button" variant="secondary" size="sm" onClick={onRequestClose}>
+      <Button data-testid="close-session-button" variant="secondary" size="sm" disabled={disabled} onClick={onRequestClose}>
         Clôturer la caisse
       </Button>
     </div>
@@ -871,13 +898,17 @@ export default function PosPage() {
     : null;
   const cashAmountValid = paymentMethod !== 'CASH' || (amountReceived !== '' && !Number.isNaN(received) && received >= grandTotal);
 
-  const canSubmit =
+  /** Conditions pour ouvrir le Sheet de paiement — indépendant du client/mode de paiement, choisis dedans. */
+  const canProceedToCheckout =
     cart.length > 0 &&
     warehouseId !== '' &&
-    clientId !== '' &&
     !!calculatedTotal &&
     !totalsLoading &&
-    insufficientLines.size === 0 &&
+    insufficientLines.size === 0;
+
+  const canSubmit =
+    canProceedToCheckout &&
+    clientId !== '' &&
     cashAmountValid &&
     !createSaleMutation.isPending;
 
@@ -918,59 +949,62 @@ export default function PosPage() {
   const canAccessCart = warehouseId === '' || (!sessionLoading && !sessionError && !!currentSession);
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
-      <PageHeader title="Caisse" description="Vente rapide au comptoir." />
-
+    <div className="mx-auto flex w-full max-w-6xl flex-col p-4 sm:p-6 lg:h-[calc(100vh-3.5rem)] lg:p-8">
       {/* Le sélecteur d'entrepôt reste toujours accessible, y compris quand le gate de session
           (S23b) bloque la grille/le panier ci-dessous — sans quoi un choix d'entrepôt erroné
           serait irréversible sans recharger la page. */}
-      <div className="px-4 pb-3 sm:px-6 lg:px-8">
-        <div className="sm:w-64">
-          <Label htmlFor="pos-warehouse">Entrepôt *</Label>
-          <NativeSelect
-            id="pos-warehouse"
-            data-testid="pos-warehouse-select"
-            value={warehouseId}
-            onChange={(e) => handleWarehouseChange(e.target.value)}
-            className="mt-1"
-          >
-            <option value="">— Choisir un entrepôt —</option>
-            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-          </NativeSelect>
-        </div>
+      <div className="mb-3 sm:w-64">
+        <Label htmlFor="pos-warehouse">Entrepôt *</Label>
+        <NativeSelect
+          id="pos-warehouse"
+          data-testid="pos-warehouse-select"
+          value={warehouseId}
+          onChange={(e) => handleWarehouseChange(e.target.value)}
+          className="mt-1"
+        >
+          <option value="">— Choisir un entrepôt —</option>
+          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </NativeSelect>
       </div>
 
       {warehouseId !== '' && currentSession && (
-        <div className="px-4 pb-3 sm:px-6 lg:px-8">
-          <CashSessionBanner session={currentSession} onRequestClose={() => setCloseSessionDialogOpen(true)} />
+        <div className="mb-3">
+          <CashSessionBanner
+            session={currentSession}
+            disabled={panelState !== 'cart'}
+            onRequestClose={() => setCloseSessionDialogOpen(true)}
+          />
         </div>
       )}
 
       {sessionChecking && (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-4 sm:px-6 lg:px-8">
+        <div className="flex min-h-0 flex-1 items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-neutral-300" />
         </div>
       )}
 
       {sessionCheckFailed && (
-        <div className="px-4 pb-4 sm:px-6 lg:px-8">
-          <ErrorState
-            message="Impossible de vérifier la session de caisse."
-            onRetry={() => void refetchSession()}
-          />
-        </div>
+        <ErrorState
+          message="Impossible de vérifier la session de caisse."
+          onRetry={() => void refetchSession()}
+        />
       )}
 
       {sessionRequired && (
-        <div className="flex min-h-0 flex-1 px-4 pb-4 sm:px-6 lg:px-8">
-          <OpenCashSessionGate onOpen={(amount) => void handleOpenSession(amount)} opening={openSessionMutation.isPending} />
-        </div>
+        <OpenCashSessionGate onOpen={(amount) => void handleOpenSession(amount)} opening={openSessionMutation.isPending} />
       )}
 
       {canAccessCart && (
-      <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4 sm:px-6 lg:px-8">
+      <>
+      {/*
+        Sous lg : colonnes empilées, page qui défile normalement (comme le reste de
+        l'app) — pas de hauteur figée ni de scroll interne, donc rien ne peut jamais
+        écraser la liste du panier. À partir de lg : deux colonnes côte à côte, chacune
+        avec son propre scroll interne borné par la hauteur du viewport.
+      */}
+      <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row">
         {/* ── Colonne gauche : recherche + grille (entrepôt sélectionné plus haut) ── */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:flex-1">
           <div>
             <Label htmlFor="pos-search">Recherche / scan</Label>
             <Input
@@ -989,7 +1023,7 @@ export default function PosPage() {
             />
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
             {warehouseId === '' && (
               <EmptyState
                 icon={Warehouse}
@@ -1014,7 +1048,7 @@ export default function PosPage() {
 
             {warehouseId !== '' && !productsLoading && !productsError && products.length > 0 && (
               <>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4">
                   {products.map((p) => (
                     <ProductCard key={p.id} product={{ ...p, quantity: stockByProduct[p.id] ?? p.quantity }} disabled={panelState !== 'cart'} onAdd={addProductToCart} />
                   ))}
@@ -1030,17 +1064,20 @@ export default function PosPage() {
         </div>
 
         {/* ── Panneau panier persistant ────────────────────────────────────── */}
-        <div className="flex w-[380px] flex-shrink-0 flex-col rounded-card border border-neutral-200 bg-white shadow-1">
+        <div className="flex w-full flex-shrink-0 flex-col rounded-card border border-neutral-200 bg-white shadow-1 lg:h-full lg:min-h-0 lg:w-[380px]">
           <div className="rounded-t-card bg-brand-500 px-4 py-3.5 text-white">
             <p className="text-[11.5px] uppercase tracking-wide text-brand-100">Total</p>
             <p className="tabular text-[24px] font-semibold">{formatXAF(calculatedTotal?.grandTotal ?? '0')}</p>
           </div>
 
-          {panelState === 'cart' && (
+          {/* Liste du panier : toujours visible tant que le reçu n'est pas affiché — y compris
+              pendant le paiement (Sheet), pour que le caissier garde le contexte de ce qu'il
+              encaisse. Seules les actions (quantité, suppression) se verrouillent hors 'cart'. */}
+          {panelState !== 'receipt' && (
             <>
-              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="p-3 lg:min-h-[220px] lg:flex-1 lg:overflow-y-auto">
                 {cart.length === 0 && (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 py-10 text-center">
+                  <div className="flex flex-col items-center justify-center gap-2 py-10 text-center lg:h-full">
                     <ShoppingCart className="h-8 w-8 text-neutral-300" strokeWidth={1.5} />
                     <p className="text-[13px] text-neutral-500">Panier vide — cliquez un produit ou scannez un article.</p>
                   </div>
@@ -1052,6 +1089,7 @@ export default function PosPage() {
                       line={line}
                       insufficient={insufficientLines.has(line.productId)}
                       liveQuantity={stockByProduct[line.productId] !== undefined ? Number(stockByProduct[line.productId]) : undefined}
+                      locked={panelState !== 'cart'}
                       onQuantityChange={updateLineQuantity}
                       onRemove={removeLine}
                     />
@@ -1059,108 +1097,31 @@ export default function PosPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 border-t border-neutral-100 p-3.5">
-                <div className="space-y-1">
-                  <Label htmlFor="pos-client">Client</Label>
-                  <NativeSelect id="pos-client" data-testid="pos-client-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                    <option value="">— Client —</option>
-                    {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </NativeSelect>
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor="pos-payment-method">Mode de paiement</Label>
-                  <NativeSelect
-                    id="pos-payment-method"
-                    data-testid="pos-payment-method-select"
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+              <div className="border-t border-neutral-100 p-3.5">
+                {panelState === 'cart' && (
+                  <Button
+                    data-testid="checkout-button"
+                    size="lg"
+                    className="w-full"
+                    disabled={!canProceedToCheckout}
+                    onClick={() => setPanelState('checkout')}
                   >
-                    <option value="CASH">Espèces</option>
-                    <option value="CARD">Carte</option>
-                    <option value="MOBILE_MONEY">Mobile Money</option>
-                  </NativeSelect>
-                </div>
-
-                {paymentMethod === 'CASH' && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="pos-amount-received">Montant reçu</Label>
-                      <Input
-                        id="pos-amount-received"
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="0"
-                        value={amountReceived}
-                        onChange={(e) => setAmountReceived(e.target.value)}
-                        className="tabular"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Monnaie à rendre</Label>
-                      <p className="tabular flex h-9 items-center rounded-field bg-neutral-50 px-3 text-[14px] font-medium text-neutral-800">
-                        {change !== null ? formatXAF(change) : '—'}
-                      </p>
-                    </div>
-                  </div>
+                    Passer au paiement
+                  </Button>
                 )}
-
-                {submitError && (
-                  <div role="alert" className="rounded-card border border-danger-200 bg-danger-50 px-3.5 py-2.5 text-[13px] text-danger-700">
-                    {submitError}
-                  </div>
+                {panelState !== 'cart' && (
+                  <p className="text-center text-[12.5px] text-neutral-500">
+                    {panelState === 'checkout' && 'Finalisez le paiement dans le panneau à droite.'}
+                    {panelState === 'awaiting-mobile-money' && 'En attente de confirmation du paiement…'}
+                    {panelState === 'mobile-money-expired' && 'Paiement expiré — voir le panneau à droite.'}
+                  </p>
                 )}
-
-                <Button
-                  data-testid="encaisser-button"
-                  size="lg"
-                  disabled={!canSubmit}
-                  loading={createSaleMutation.isPending}
-                  onClick={() => void handleEncaisser()}
-                >
-                  {!createSaleMutation.isPending && 'Encaisser'}
-                  {createSaleMutation.isPending && 'Encaissement…'}
-                </Button>
               </div>
             </>
           )}
 
-          {panelState === 'awaiting-mobile-money' && awaitingSale && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-              <Loader2 className="h-8 w-8 animate-spin text-brand-500" />
-              <Smartphone className="h-6 w-6 text-neutral-400" />
-              <p className="text-[14px] font-medium text-neutral-900">En attente de confirmation du paiement</p>
-              <p className="text-[13px] text-neutral-500">
-                Référence <span className="tabular">{awaitingSale.reference}</span> — <span className="tabular">{formatXAF(awaitingSale.grandTotal)}</span>
-              </p>
-              {awaitingSale.paymentLink && (
-                <a
-                  href={awaitingSale.paymentLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[12.5px] text-brand-600 underline underline-offset-2"
-                >
-                  Lien de paiement
-                </a>
-              )}
-              <p className="text-[12px] text-neutral-400">Le panier reste bloqué jusqu&apos;à confirmation.</p>
-            </div>
-          )}
-
-          {panelState === 'mobile-money-expired' && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-              <XCircle className="h-8 w-8 text-danger-500" />
-              <p className="text-[14px] font-medium text-neutral-900">Paiement mobile money expiré</p>
-              <p className="text-[13px] text-neutral-500">{expiredReason}</p>
-              <Button variant="secondary" onClick={startNewSale}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                Réessayer
-              </Button>
-            </div>
-          )}
-
           {panelState === 'receipt' && lastReceipt && (
-            <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
+            <div className="p-3.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
               <div className="mb-3 flex items-center gap-2 text-brand-700">
                 <CheckCircle2 className="h-5 w-5" />
                 <p className="text-[13.5px] font-medium">Vente encaissée avec succès.</p>
@@ -1172,7 +1133,135 @@ export default function PosPage() {
             </div>
           )}
         </div>
+
+        {/* ── Sheet paiement (Client, Mode de paiement, attente/expiration mobile money) ── */}
+        <Sheet
+          open={panelState === 'checkout' || panelState === 'awaiting-mobile-money' || panelState === 'mobile-money-expired'}
+          onOpenChange={(open) => {
+            // Attente/expiration mobile money : fermeture ignorée, actions explicites uniquement
+            // (le panier reste bloqué tant que la vente n'est pas résolue — §18.2 étape 10).
+            if (!open && panelState === 'checkout') setPanelState('cart');
+          }}
+        >
+          <SheetContent hideClose={panelState === 'awaiting-mobile-money' || panelState === 'mobile-money-expired'}>
+            {panelState === 'checkout' && (
+              <>
+                <SheetHeader>
+                  <SheetTitle>Paiement</SheetTitle>
+                  <SheetDescription>Le total est recalculé côté serveur, jamais depuis cet affichage.</SheetDescription>
+                </SheetHeader>
+                <div className="flex-1 overflow-y-auto px-6 py-5">
+                  <div className="flex flex-col gap-4">
+                    <div className="rounded-card bg-brand-50 px-4 py-3">
+                      <p className="text-[11.5px] text-brand-700/70">Total</p>
+                      <p className="tabular text-[20px] font-semibold text-brand-800">{formatXAF(calculatedTotal?.grandTotal ?? '0')}</p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="pos-client">Client</Label>
+                      <NativeSelect id="pos-client" data-testid="pos-client-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
+                        <option value="">— Client —</option>
+                        {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </NativeSelect>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="pos-payment-method">Mode de paiement</Label>
+                      <NativeSelect
+                        id="pos-payment-method"
+                        data-testid="pos-payment-method-select"
+                        value={paymentMethod}
+                        onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                      >
+                        <option value="CASH">Espèces</option>
+                        <option value="CARD">Carte</option>
+                        <option value="MOBILE_MONEY">Mobile Money</option>
+                      </NativeSelect>
+                    </div>
+
+                    {paymentMethod === 'CASH' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label htmlFor="pos-amount-received">Montant reçu</Label>
+                          <Input
+                            id="pos-amount-received"
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0"
+                            value={amountReceived}
+                            onChange={(e) => setAmountReceived(e.target.value)}
+                            className="tabular"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label>Monnaie à rendre</Label>
+                          <p className="tabular flex h-9 items-center rounded-field bg-neutral-50 px-3 text-[14px] font-medium text-neutral-800">
+                            {change !== null ? formatXAF(change) : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {submitError && (
+                      <div role="alert" className="rounded-card border border-danger-200 bg-danger-50 px-3.5 py-2.5 text-[13px] text-danger-700">
+                        {submitError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <SheetFooter>
+                  <Button
+                    data-testid="encaisser-button"
+                    size="lg"
+                    className="w-full"
+                    disabled={!canSubmit}
+                    loading={createSaleMutation.isPending}
+                    onClick={() => void handleEncaisser()}
+                  >
+                    {!createSaleMutation.isPending && 'Encaisser'}
+                    {createSaleMutation.isPending && 'Encaissement…'}
+                  </Button>
+                </SheetFooter>
+              </>
+            )}
+
+            {panelState === 'awaiting-mobile-money' && awaitingSale && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-brand-500" />
+                <Smartphone className="h-6 w-6 text-neutral-400" />
+                <p className="text-[14px] font-medium text-neutral-900">En attente de confirmation du paiement</p>
+                <p className="text-[13px] text-neutral-500">
+                  Référence <span className="tabular">{awaitingSale.reference}</span> — <span className="tabular">{formatXAF(awaitingSale.grandTotal)}</span>
+                </p>
+                {awaitingSale.paymentLink && (
+                  <a
+                    href={awaitingSale.paymentLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[12.5px] text-brand-600 underline underline-offset-2"
+                  >
+                    Lien de paiement
+                  </a>
+                )}
+                <p className="text-[12px] text-neutral-400">Le panier reste bloqué jusqu&apos;à confirmation.</p>
+              </div>
+            )}
+
+            {panelState === 'mobile-money-expired' && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                <XCircle className="h-8 w-8 text-danger-500" />
+                <p className="text-[14px] font-medium text-neutral-900">Paiement mobile money expiré</p>
+                <p className="text-[13px] text-neutral-500">{expiredReason}</p>
+                <Button variant="secondary" onClick={startNewSale}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Réessayer
+                </Button>
+              </div>
+            )}
+          </SheetContent>
+        </Sheet>
       </div>
+      </>
       )}
 
       <CloseCashSessionDialog
