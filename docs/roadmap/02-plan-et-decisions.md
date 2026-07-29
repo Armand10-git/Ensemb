@@ -131,7 +131,7 @@
 
 > **Configuration sensible.** Ne jamais réécrire un fichier `.env` à chaud pour changer les clés de l'agrégateur de paiement/Twilio depuis l'UI. Toute configuration sensible (clés API, SMTP) est stockée **en base**, par organisation (`SmtpServer`, table `settings` étendue) et lue à l'exécution.
 
-> **Session de caisse.** Non prévue par défaut : le POS enregistre directement des ventes `isPos=true`, sans ouverture/fermeture ni fond de caisse. **Recommandation ferme : l'inclure** — fond de caisse, ouverture/clôture et écart de caisse sont le premier reproche des gérants en usage multi-caissier réel. Décision à acter avant la Phase P5 ; si elle est retenue, la session S23b (Bloc E, §19) en porte l'implémentation.
+> **Session de caisse.** **Décision actée le 2026-07-28 : retenue** — recommandation ferme suivie (fond de caisse, ouverture/clôture et écart de caisse sont le premier reproche des gérants en usage multi-caissier réel). **Implémentée S23b** ✅ 2026-07-29 (Bloc E, §19) : modèle `CashSession`, une session `OPEN` par caissier, `PosService.createSale()` exige une session ouverte et y rattache la vente, écart calculé serveur à la clôture (`countedClosingAmount − expectedClosingAmount`, CASH uniquement).
 
 > **Discipline d'architecture.** Respecter strictement le découpage `Module → Controller → Service → Repository (Prisma)` dès la Phase P1, sans concentrer la logique métier dans les contrôleurs.
 

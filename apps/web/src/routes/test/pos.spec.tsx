@@ -84,21 +84,73 @@ const calcTotalResp = {
 
 const emptyPaginated = { data: [], total: 0, page: 1, limit: 20 };
 
+const CASH_SESSION_ID = 'cs000001-0000-0000-0000-000000000001';
+
 /**
- * Route les GET par défaut (entrepôts, clients, recherche produits) et les POST
- * (calcul de total). `products` peut être surchargé par test pour simuler
- * grille vide/erreur, et `postImpl` pour simuler la création de vente / erreurs.
+ * Session de caisse OPEN par défaut — la plupart des tests exercent le panier avec une
+ * session déjà ouverte. openingAmount délibérément distinct des fixtures grandTotal ('5000')
+ * utilisées ailleurs dans ce fichier pour que `getByText` sur un montant ne matche jamais à
+ * la fois le bandeau de session et le panier/reçu.
  */
-function setupDefaultMocks(products: unknown[] = [makeProductA()]) {
+const openSessionResp = {
+  id: CASH_SESSION_ID,
+  organizationId: 'org00001-0000-0000-0000-000000000001',
+  reference: 'CS-2026-000001',
+  warehouseId: WAREHOUSE_ID,
+  userId: 'user0001-0000-0000-0000-000000000001',
+  openingAmount: '10000',
+  expectedClosingAmount: null,
+  countedClosingAmount: null,
+  variance: null,
+  status: 'OPEN',
+  notes: null,
+  openedAt: '2026-07-28T08:00:00.000Z',
+  closedAt: null,
+};
+
+/**
+ * Route les GET par défaut (session de caisse courante, entrepôts, clients, recherche
+ * produits) et les POST (calcul de total, ouverture de session) / PATCH (clôture de session).
+ * `products` peut être surchargé par test pour simuler grille vide/erreur, `initialSession`
+ * pour simuler l'absence de session (gate S23b). La session est un état mutable partagé par
+ * les mocks GET/POST/PATCH pour que le cycle ouverture → fermeture reste cohérent d'un appel
+ * à l'autre (comme le ferait réellement le serveur).
+ */
+function setupDefaultMocks(products: unknown[] = [makeProductA()], initialSession: unknown = openSessionResp) {
+  let session: unknown = initialSession;
+
   mockApi.get.mockImplementation((path: string) => {
-    if (path.includes('/warehouses'))            return Promise.resolve(warehouseResp);
-    if (path.includes('/partners/clients'))      return Promise.resolve(clientResp);
-    if (path.includes('/pos/products/search'))   return Promise.resolve(products);
+    if (path.includes('/cash-sessions/current'))  return Promise.resolve(session);
+    if (path.includes('/warehouses'))              return Promise.resolve(warehouseResp);
+    if (path.includes('/partners/clients'))        return Promise.resolve(clientResp);
+    if (path.includes('/pos/products/search'))     return Promise.resolve(products);
     return Promise.resolve(emptyPaginated);
   });
-  mockApi.post.mockImplementation((path: string) => {
+  mockApi.post.mockImplementation((path: string, body?: unknown) => {
     if (path === '/pos/calculate-total') return Promise.resolve(calcTotalResp);
+    if (path === '/cash-sessions/open') {
+      const b = body as { openingAmount: string };
+      session = { ...openSessionResp, openingAmount: b.openingAmount };
+      return Promise.resolve(session);
+    }
     return Promise.reject(new Error(`POST non mocké : ${path}`));
+  });
+  mockApi.patch.mockImplementation((path: string, body?: unknown) => {
+    if (path === `/cash-sessions/${CASH_SESSION_ID}/close`) {
+      const b = body as { countedClosingAmount: string };
+      const opening = Number((session as { openingAmount: string }).openingAmount);
+      const counted = Number(b.countedClosingAmount);
+      const closed = {
+        ...(session as Record<string, unknown>),
+        status: 'CLOSED',
+        expectedClosingAmount: String(opening),
+        countedClosingAmount: b.countedClosingAmount,
+        variance: String(counted - opening),
+      };
+      session = null;
+      return Promise.resolve(closed);
+    }
+    return Promise.reject(new Error(`PATCH non mocké : ${path}`));
   });
 }
 
@@ -187,6 +239,7 @@ describe('PosPage — Recherche produit', () => {
 
   it("affiche un état d'erreur actionnable si la recherche produit échoue", async () => {
     mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/cash-sessions/current')) return Promise.resolve(openSessionResp);
       if (path.includes('/warehouses'))          return Promise.resolve(warehouseResp);
       if (path.includes('/partners/clients'))    return Promise.resolve(clientResp);
       if (path.includes('/pos/products/search')) return Promise.reject(new Error('Erreur réseau'));
@@ -324,6 +377,7 @@ describe('PosPage — Validation MOBILE_MONEY', () => {
     });
 
     mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/cash-sessions/current')) return Promise.resolve(openSessionResp);
       if (path.includes('/warehouses'))          return Promise.resolve(warehouseResp);
       if (path.includes('/partners/clients'))    return Promise.resolve(clientResp);
       if (path.includes('/pos/products/search')) return Promise.resolve([makeProductA()]);
@@ -447,5 +501,73 @@ describe('PosPage — Erreurs de création de vente', () => {
     // Le bouton "Encaisser" redevient utilisable (pas bloqué en chargement, pas de crash).
     await waitFor(() => expect(screen.getByTestId('encaisser-button')).not.toBeDisabled());
     expect(screen.getByText('Encaisser')).toBeInTheDocument();
+  });
+});
+
+describe('PosPage — Session de caisse (S23b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("bloque le panier et affiche le formulaire d'ouverture tant qu'aucune session de caisse n'est ouverte", async () => {
+    setupDefaultMocks([makeProductA()], null);
+    await selectWarehouse();
+
+    await waitFor(() =>
+      expect(screen.getByText('Ouvrez votre session de caisse pour commencer à encaisser')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('opening-amount-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('product-card-PROD-001')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('encaisser-button')).not.toBeInTheDocument();
+  });
+
+  it('ouvre une session via le formulaire puis affiche la grille produits et le bandeau de session', async () => {
+    setupDefaultMocks([makeProductA()], null);
+    await selectWarehouse();
+    await waitFor(() => expect(screen.getByTestId('opening-amount-input')).toBeInTheDocument());
+
+    await userEvent.clear(screen.getByTestId('opening-amount-input'));
+    await userEvent.type(screen.getByTestId('opening-amount-input'), '5000');
+    await userEvent.click(screen.getByTestId('open-session-button'));
+
+    await waitFor(() => expect(screen.getByTestId('product-card-PROD-001')).toBeInTheDocument());
+    expect(screen.getByText('CS-2026-000001')).toBeInTheDocument();
+    expect(screen.getByTestId('close-session-button')).toBeInTheDocument();
+  });
+
+  it('clôture la session et affiche le récapitulatif avec un écart positif (excédent, badge succès)', async () => {
+    setupDefaultMocks([makeProductA()]);
+    await selectWarehouseAndWaitProducts();
+
+    await userEvent.click(screen.getByTestId('close-session-button'));
+    await waitFor(() => expect(screen.getByTestId('counted-amount-input')).toBeInTheDocument());
+
+    // Fond de caisse 10000 (openSessionResp), aucune vente CASH rattachée dans ce test →
+    // expectedClosingAmount = 10000 ; compté = 10300 → écart = +300 (excédent).
+    await userEvent.type(screen.getByTestId('counted-amount-input'), '10300');
+    await userEvent.click(screen.getByTestId('confirm-close-session-button'));
+
+    await waitFor(() => expect(screen.getByTestId('close-session-summary')).toBeInTheDocument());
+    expect(screen.getByText(/Excédent/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('close-session-summary-dismiss'));
+    await waitFor(() =>
+      expect(screen.getByText('Ouvrez votre session de caisse pour commencer à encaisser')).toBeInTheDocument(),
+    );
+  });
+
+  it('clôture la session et affiche un écart négatif (manque, badge danger)', async () => {
+    setupDefaultMocks([makeProductA()]);
+    await selectWarehouseAndWaitProducts();
+
+    await userEvent.click(screen.getByTestId('close-session-button'));
+    await waitFor(() => expect(screen.getByTestId('counted-amount-input')).toBeInTheDocument());
+
+    // Fond de caisse 10000, compté 9800 → écart = -200 (manque).
+    await userEvent.type(screen.getByTestId('counted-amount-input'), '9800');
+    await userEvent.click(screen.getByTestId('confirm-close-session-button'));
+
+    await waitFor(() => expect(screen.getByTestId('close-session-summary')).toBeInTheDocument());
+    expect(screen.getByText(/Manque/)).toBeInTheDocument();
   });
 });

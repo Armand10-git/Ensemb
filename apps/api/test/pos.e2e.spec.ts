@@ -49,6 +49,9 @@ let clientAId: string;
 let warehouseAId: string;
 let productAId: string;
 let pwId: string;
+let userAId: string;
+let cashSessionAId: string;
+let warehouseNoSessionId: string;
 
 const PERMS = ['sales.create', 'sales.view'];
 
@@ -83,7 +86,7 @@ beforeAll(async () => {
     return user.id;
   }
 
-  await setupUser(orgAId, `pos-a-${SUFFIX}@e2e.cm`);
+  userAId = await setupUser(orgAId, `pos-a-${SUFFIX}@e2e.cm`);
   await setupUser(orgBId, `pos-b-${SUFFIX}@e2e.cm`);
 
   const catA = await prisma.category.create({
@@ -108,6 +111,12 @@ beforeAll(async () => {
   });
   warehouseAId = whA.id;
 
+  // Entrepôt sans session de caisse OPEN — pour le test du gate S23b ci-dessous.
+  const whNoSession = await prisma.warehouse.create({
+    data: { organizationId: orgAId, name: `WH POS No-Session-${SUFFIX}` },
+  });
+  warehouseNoSessionId = whNoSession.id;
+
   const clientA = await prisma.client.create({
     data: { organizationId: orgAId, name: `Client POS ${SUFFIX}`, code: 1 },
   });
@@ -117,6 +126,22 @@ beforeAll(async () => {
     data: { productId: productAId, warehouseId: warehouseAId, quantity: new Decimal('100'), version: 0 },
   });
   pwId = pw.id;
+
+  // S23b — PosService.createSale() exige désormais une session de caisse OPEN pour
+  // (organizationId, userId, warehouseId) : créée directement en base (pas via l'API
+  // /cash-sessions, hors permission/périmètre de cette suite POS) pour que tous les tests
+  // POST /pos/sales existants restent valides. Testée pour elle-même dans cash-session.e2e.spec.ts.
+  const csA = await prisma.cashSession.create({
+    data: {
+      organizationId: orgAId,
+      reference: `CS-E2E-${SUFFIX}-A`,
+      warehouseId: warehouseAId,
+      userId: userAId,
+      openingAmount: new Decimal('0'),
+      status: 'OPEN',
+    },
+  });
+  cashSessionAId = csA.id;
 
   const moduleRef: TestingModule = await Test.createTestingModule({
     imports: [
@@ -165,6 +190,7 @@ afterAll(async () => {
   await prisma.paymentSale.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.saleDetail.deleteMany({ where: { sale: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.sale.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
+  await prisma.cashSession.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.client.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.productWarehouse.deleteMany({ where: { productId: productAId } });
   await prisma.product.deleteMany({ where: { organizationId: orgAId } });
@@ -268,6 +294,26 @@ describe('POST /api/v1/pos/sales', () => {
     expect(payments[0]!.method).toBe('CASH');
     expect(new Decimal(payments[0]!.change ?? '0').toString()).toBe('500');
     expect(new Decimal(payments[0]!.amount).toString()).toBe('3000');
+
+    // S23b — la vente est rattachée à la session de caisse OPEN de l'entrepôt/utilisateur.
+    const sale = await prisma.sale.findUnique({ where: { id: res.body.id as string }, select: { cashSessionId: true } });
+    expect(sale?.cashSessionId).toBe(cashSessionAId);
+  });
+
+  it("400 — S23b : aucune session de caisse OPEN pour cet entrepôt, aucune vente créée", async () => {
+    const res = await asA('post', '/api/v1/pos/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseNoSessionId,
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+      paymentMethod: 'CASH',
+      amountReceived: '1000',
+    });
+
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toMatch(/session de caisse/i);
+
+    const salesCount = await prisma.sale.count({ where: { organizationId: orgAId, warehouseId: warehouseNoSessionId } });
+    expect(salesCount).toBe(0);
   });
 
   it('400 — CASH : amountReceived insuffisant, aucun décrément ni PaymentSale', async () => {

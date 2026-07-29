@@ -2,15 +2,25 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { CheckCircle2, Loader2, RefreshCw, ShoppingCart, Smartphone, Trash2, Warehouse, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, ShoppingCart, Smartphone, Trash2, Wallet, Warehouse, XCircle } from 'lucide-react';
 import { api } from '../lib/api';
-import { cn, formatXAF } from '../lib/utils';
+import { cn, formatTime, formatXAF } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { NativeSelect } from '../components/ui/native-select';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '../components/ui/alert-dialog';
 import { PageHeader, EmptyState, ErrorState } from '../components/page-states';
 import { PosReceipt, type PosReceiptData, type PosReceiptPaymentMethod } from '../components/PosReceipt';
 
@@ -90,6 +100,27 @@ interface CartLine {
 
 type PaymentMethod = 'CASH' | 'CARD' | 'MOBILE_MONEY';
 type PanelState = 'cart' | 'awaiting-mobile-money' | 'receipt' | 'mobile-money-expired';
+
+/**
+ * Session de caisse (S23b) — ouverture/clôture avec fond de caisse et écart. Tous les
+ * Decimal sont sérialisés en string sur le fil (même patron que Sale/PosLine ci-dessus).
+ * `variance` : positif = excédent, négatif = manque, zéro = aucun écart.
+ */
+interface CashSessionResponse {
+  id: string;
+  organizationId: string;
+  reference: string;
+  warehouseId: string;
+  userId: string;
+  openingAmount: string;
+  expectedClosingAmount: string | null;
+  countedClosingAmount: string | null;
+  variance: string | null;
+  status: 'OPEN' | 'CLOSED';
+  notes: string | null;
+  openedAt: string;
+  closedAt: string | null;
+}
 
 const VITE_API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
 const WS_URL = VITE_API_URL.replace('/api/v1', '');
@@ -212,6 +243,46 @@ function useCalculateTotal(cart: CartLine[]) {
 
 function useCreateSale() {
   return useMutation({ mutationFn: (data: unknown) => api.post<Sale>('/pos/sales', data) });
+}
+
+/**
+ * Session de caisse ouverte par l'utilisateur courant pour cet entrepôt, ou `null` si
+ * aucune (le serveur renvoie `null` en corps JSON, jamais un 204 — cf. cash-sessions.controller.ts).
+ * Change automatiquement de session quand l'entrepôt change (queryKey incluant warehouseId).
+ */
+function useCurrentCashSession(warehouseId: string) {
+  return useQuery<CashSessionResponse | null>({
+    queryKey: ['cash-session-current', warehouseId],
+    queryFn: () => api.get<CashSessionResponse | null>(`/cash-sessions/current?warehouseId=${warehouseId}`),
+    enabled: warehouseId !== '',
+  });
+}
+
+/** Ouvre une session de caisse (fond de caisse déclaré). Invalide la session courante de l'entrepôt. */
+function useOpenCashSession(warehouseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { warehouseId: string; openingAmount: string }) =>
+      api.post<CashSessionResponse>('/cash-sessions/open', data),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['cash-session-current', warehouseId] }); },
+  });
+}
+
+/**
+ * Clôture la session de caisse courante (montant compté saisi par le caissier). Invalide la
+ * session courante (redevient `null` → le gate se réaffiche) et la liste `/cash-sessions`
+ * (historique) pour qu'elle reflète immédiatement l'écart calculé côté serveur.
+ */
+function useCloseCashSession(warehouseId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, countedClosingAmount }: { id: string; countedClosingAmount: string }) =>
+      api.patch<CashSessionResponse>(`/cash-sessions/${id}/close`, { countedClosingAmount }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['cash-session-current', warehouseId] });
+      void qc.invalidateQueries({ queryKey: ['cash-sessions'] });
+    },
+  });
 }
 
 /** Poll GET /sales/:id toutes les 3s jusqu'à sortie de AWAITING_PAYMENT (§18.2 étape 10). */
@@ -357,6 +428,211 @@ function CartLineRow({
   );
 }
 
+// ─── Session de caisse (S23b) ──────────────────────────────────────────────────
+
+/**
+ * Badge d'écart de clôture — jamais un nombre nu (standards.md règle 10 : le statut est
+ * toujours visible). Excédent (variance > 0) = succès, manque (variance < 0) = danger,
+ * exactement à l'équilibre = neutre.
+ */
+function VarianceBadge({ variance }: { variance: string | null }) {
+  if (variance === null) return <Badge variant="neutral">—</Badge>;
+  const n = Number(variance);
+  if (n > 0) return <Badge variant="success" className="tabular">Excédent {formatXAF(Math.abs(n))}</Badge>;
+  if (n < 0) return <Badge variant="danger" className="tabular">Manque {formatXAF(Math.abs(n))}</Badge>;
+  return <Badge variant="neutral">Aucun écart</Badge>;
+}
+
+/**
+ * Bandeau permanent affiché au-dessus de la grille/panier tant qu'une session de caisse est
+ * ouverte pour l'entrepôt sélectionné — référence, heure d'ouverture, fond de caisse, action
+ * de clôture (§10 « session de caisse » de standards.md).
+ */
+function CashSessionBanner({ session, onRequestClose }: { session: CashSessionResponse; onRequestClose: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-neutral-200 bg-white px-4 py-2.5 shadow-1">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
+        <div className="flex items-center gap-1.5">
+          <Wallet className="h-3.5 w-3.5 text-brand-500" strokeWidth={1.8} />
+          <span className="text-neutral-500">Session</span>
+          <span className="tabular font-semibold text-neutral-900">{session.reference}</span>
+        </div>
+        <div>
+          <span className="text-neutral-500">Ouverte à </span>
+          <span className="tabular text-neutral-800">{formatTime(session.openedAt)}</span>
+        </div>
+        <div>
+          <span className="text-neutral-500">Fond de caisse </span>
+          <span className="tabular text-neutral-800">{formatXAF(session.openingAmount)}</span>
+        </div>
+      </div>
+      <Button data-testid="close-session-button" variant="secondary" size="sm" onClick={onRequestClose}>
+        Clôturer la caisse
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * État vide actionnable remplaçant grille produits + panneau panier tant qu'aucune session
+ * de caisse n'est ouverte pour l'entrepôt sélectionné — le panier reste inutilisable
+ * (cohérent avec le gate serveur ajouté sur PosService.createSale()).
+ */
+function OpenCashSessionGate({ onOpen, opening }: { onOpen: (openingAmount: string) => void; opening: boolean }) {
+  const [openingAmount, setOpeningAmount] = useState('0');
+  const amountValue = Number(openingAmount);
+  const canSubmit = openingAmount.trim() !== '' && !Number.isNaN(amountValue) && amountValue >= 0;
+
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="w-full max-w-sm rounded-card border border-neutral-200 bg-white p-6 text-center shadow-1">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-brand-50">
+          <Wallet className="h-6 w-6 text-brand-500" strokeWidth={1.5} />
+        </div>
+        <p className="font-display text-[16px] font-semibold text-neutral-900">
+          Ouvrez votre session de caisse pour commencer à encaisser
+        </p>
+        <p className="mt-1.5 text-[13.5px] text-neutral-500">
+          Déclarez le fond de caisse (espèces en tiroir) au début de votre service.
+        </p>
+        <div className="mt-5 space-y-1.5 text-left">
+          <Label htmlFor="opening-amount-input">Fond de caisse (XAF) *</Label>
+          <Input
+            id="opening-amount-input"
+            data-testid="opening-amount-input"
+            type="text"
+            inputMode="decimal"
+            placeholder="0"
+            value={openingAmount}
+            onChange={(e) => setOpeningAmount(e.target.value)}
+            className="tabular"
+          />
+        </div>
+        <Button
+          data-testid="open-session-button"
+          size="lg"
+          className="mt-4 w-full"
+          disabled={!canSubmit || opening}
+          loading={opening}
+          onClick={() => onOpen(openingAmount)}
+        >
+          {!opening && 'Ouvrir la session'}
+          {opening && 'Ouverture…'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * AlertDialog de clôture de session — nomme la session (standards.md règle 4), puis affiche
+ * le récapitulatif renvoyé par le serveur (fond de caisse, attendu, compté, écart) sans
+ * fermer automatiquement : la confirmation (`preventDefault`) garde le dialogue ouvert pour
+ * la lecture de l'écart avant que le caissier ne le ferme explicitement.
+ */
+function CloseCashSessionDialog({
+  session,
+  open,
+  onOpenChange,
+  onConfirm,
+  closing,
+  closedResult,
+}: {
+  session: CashSessionResponse | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (countedClosingAmount: string) => void;
+  closing: boolean;
+  closedResult: CashSessionResponse | null;
+}) {
+  const [countedAmount, setCountedAmount] = useState('');
+
+  useEffect(() => {
+    if (open) setCountedAmount('');
+  }, [open]);
+
+  const amountValue = Number(countedAmount);
+  const canConfirm = countedAmount.trim() !== '' && !Number.isNaN(amountValue) && amountValue >= 0;
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        {!closedResult && (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clôturer la session {session?.reference ?? ''} ?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Comptez les espèces en tiroir et saisissez le montant compté. L&apos;écart avec le
+                montant attendu est calculé et journalisé par le serveur.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-1.5">
+              <Label htmlFor="counted-amount-input">Montant compté (XAF) *</Label>
+              <Input
+                id="counted-amount-input"
+                data-testid="counted-amount-input"
+                type="text"
+                inputMode="decimal"
+                placeholder="0"
+                value={countedAmount}
+                onChange={(e) => setCountedAmount(e.target.value)}
+                className="tabular"
+              />
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => onOpenChange(false)}>Annuler</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="confirm-close-session-button"
+                disabled={!canConfirm || closing}
+                onClick={(e) => {
+                  // Empêche la fermeture automatique du AlertDialog (comportement Radix par
+                  // défaut) : le récapitulatif serveur doit s'afficher dans ce même dialogue.
+                  e.preventDefault();
+                  onConfirm(countedAmount);
+                }}
+              >
+                {closing ? 'Clôture…' : 'Clôturer'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </>
+        )}
+
+        {closedResult && (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Session {closedResult.reference} clôturée</AlertDialogTitle>
+              <AlertDialogDescription>Récapitulatif de la journée de caisse.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-2 rounded-card bg-neutral-50 px-4 py-3 text-[13.5px]" data-testid="close-session-summary">
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-500">Fond de caisse</span>
+                <span className="tabular font-medium text-neutral-900">{formatXAF(closedResult.openingAmount)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-500">Attendu en caisse</span>
+                <span className="tabular font-medium text-neutral-900">{formatXAF(closedResult.expectedClosingAmount)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-500">Montant compté</span>
+                <span className="tabular font-medium text-neutral-900">{formatXAF(closedResult.countedClosingAmount)}</span>
+              </div>
+              <div className="flex items-center justify-between border-t border-neutral-200 pt-2">
+                <span className="text-neutral-500">Écart</span>
+                <VarianceBadge variance={closedResult.variance} />
+              </div>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogAction data-testid="close-session-summary-dismiss" onClick={() => onOpenChange(false)}>
+                Fermer
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </>
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 // ─── Écran principal ──────────────────────────────────────────────────────────
 
 export default function PosPage() {
@@ -381,10 +657,22 @@ export default function PosPage() {
 
   const [stockByProduct, setStockByProduct] = useState<Record<string, string>>({});
 
+  const [closeSessionDialogOpen, setCloseSessionDialogOpen] = useState(false);
+  const [closedSessionSummary, setClosedSessionSummary] = useState<CashSessionResponse | null>(null);
+
   const { data: warehouseData } = useWarehouses();
   const { data: clientData } = useClients();
   const warehouses = warehouseData?.data ?? [];
   const clients = clientData?.data ?? [];
+
+  const {
+    data: currentSession,
+    isLoading: sessionLoading,
+    isError: sessionError,
+    refetch: refetchSession,
+  } = useCurrentCashSession(warehouseId);
+  const openSessionMutation = useOpenCashSession(warehouseId);
+  const closeSessionMutation = useCloseCashSession(warehouseId);
 
   const {
     data: productData,
@@ -457,6 +745,38 @@ export default function PosPage() {
       setCart([]);
     }
     setWarehouseId(newWarehouseId);
+  }
+
+  /** Ouvre une session de caisse (fond de caisse déclaré) pour l'entrepôt sélectionné. */
+  async function handleOpenSession(openingAmount: string) {
+    try {
+      await openSessionMutation.mutateAsync({ warehouseId, openingAmount });
+      toast.success('Session de caisse ouverte.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erreur lors de l'ouverture de la session.");
+    }
+  }
+
+  /**
+   * Clôture la session en cours. Le résultat (avec expectedClosingAmount/variance calculés
+   * côté serveur) reste affiché DANS le AlertDialog (cf. CloseCashSessionDialog) tant que le
+   * caissier ne l'a pas fermé explicitement — le panier est vidé, la prochaine session
+   * démarrera propre.
+   */
+  async function handleCloseSession(countedClosingAmount: string) {
+    if (!currentSession) return;
+    try {
+      const closed = await closeSessionMutation.mutateAsync({ id: currentSession.id, countedClosingAmount });
+      setClosedSessionSummary(closed);
+      setCart([]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Erreur lors de la clôture de la session.');
+    }
+  }
+
+  function handleCloseDialogOpenChange(open: boolean) {
+    setCloseSessionDialogOpen(open);
+    if (!open) setClosedSessionSummary(null);
   }
 
   function resetForNextSale() {
@@ -589,44 +909,84 @@ export default function PosPage() {
 
   const partial = products.length === SEARCH_RESULT_LIMIT;
 
+  // Le panier/la grille ne sont accessibles que si l'entrepôt a une session de caisse OPEN
+  // (cohérent avec le gate serveur sur PosService.createSale(), §18.2 — S23b). Trois états
+  // intermédiaires possibles pendant la vérification, avant le cas nominal "session ouverte".
+  const sessionChecking = warehouseId !== '' && sessionLoading;
+  const sessionCheckFailed = warehouseId !== '' && !sessionLoading && sessionError;
+  const sessionRequired = warehouseId !== '' && !sessionLoading && !sessionError && currentSession === null;
+  const canAccessCart = warehouseId === '' || (!sessionLoading && !sessionError && !!currentSession);
+
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col">
       <PageHeader title="Caisse" description="Vente rapide au comptoir." />
 
+      {/* Le sélecteur d'entrepôt reste toujours accessible, y compris quand le gate de session
+          (S23b) bloque la grille/le panier ci-dessous — sans quoi un choix d'entrepôt erroné
+          serait irréversible sans recharger la page. */}
+      <div className="px-4 pb-3 sm:px-6 lg:px-8">
+        <div className="sm:w-64">
+          <Label htmlFor="pos-warehouse">Entrepôt *</Label>
+          <NativeSelect
+            id="pos-warehouse"
+            data-testid="pos-warehouse-select"
+            value={warehouseId}
+            onChange={(e) => handleWarehouseChange(e.target.value)}
+            className="mt-1"
+          >
+            <option value="">— Choisir un entrepôt —</option>
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </NativeSelect>
+        </div>
+      </div>
+
+      {warehouseId !== '' && currentSession && (
+        <div className="px-4 pb-3 sm:px-6 lg:px-8">
+          <CashSessionBanner session={currentSession} onRequestClose={() => setCloseSessionDialogOpen(true)} />
+        </div>
+      )}
+
+      {sessionChecking && (
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-4 sm:px-6 lg:px-8">
+          <Loader2 className="h-6 w-6 animate-spin text-neutral-300" />
+        </div>
+      )}
+
+      {sessionCheckFailed && (
+        <div className="px-4 pb-4 sm:px-6 lg:px-8">
+          <ErrorState
+            message="Impossible de vérifier la session de caisse."
+            onRetry={() => void refetchSession()}
+          />
+        </div>
+      )}
+
+      {sessionRequired && (
+        <div className="flex min-h-0 flex-1 px-4 pb-4 sm:px-6 lg:px-8">
+          <OpenCashSessionGate onOpen={(amount) => void handleOpenSession(amount)} opening={openSessionMutation.isPending} />
+        </div>
+      )}
+
+      {canAccessCart && (
       <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4 sm:px-6 lg:px-8">
-        {/* ── Colonne gauche : entrepôt + recherche + grille ─────────────────── */}
+        {/* ── Colonne gauche : recherche + grille (entrepôt sélectionné plus haut) ── */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-col gap-2.5 sm:flex-row">
-            <div className="sm:w-64">
-              <Label htmlFor="pos-warehouse">Entrepôt *</Label>
-              <NativeSelect
-                id="pos-warehouse"
-                data-testid="pos-warehouse-select"
-                value={warehouseId}
-                onChange={(e) => handleWarehouseChange(e.target.value)}
-                className="mt-1"
-              >
-                <option value="">— Choisir un entrepôt —</option>
-                {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </NativeSelect>
-            </div>
-            <div className="flex-1">
-              <Label htmlFor="pos-search">Recherche / scan</Label>
-              <Input
-                id="pos-search"
-                ref={searchInputRef}
-                type="search"
-                placeholder="Nom, code produit ou scan douchette…"
-                aria-label="Rechercher un produit"
-                value={searchQuery}
-                disabled={panelState !== 'cart'}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); void handleScanEnter(); }
-                }}
-                className="mt-1"
-              />
-            </div>
+          <div>
+            <Label htmlFor="pos-search">Recherche / scan</Label>
+            <Input
+              id="pos-search"
+              ref={searchInputRef}
+              type="search"
+              placeholder="Nom, code produit ou scan douchette…"
+              aria-label="Rechercher un produit"
+              value={searchQuery}
+              disabled={panelState !== 'cart'}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); void handleScanEnter(); }
+              }}
+              className="mt-1"
+            />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -813,6 +1173,16 @@ export default function PosPage() {
           )}
         </div>
       </div>
+      )}
+
+      <CloseCashSessionDialog
+        session={currentSession ?? null}
+        open={closeSessionDialogOpen}
+        onOpenChange={handleCloseDialogOpenChange}
+        onConfirm={(amount) => void handleCloseSession(amount)}
+        closing={closeSessionMutation.isPending}
+        closedResult={closedSessionSummary}
+      />
     </div>
   );
 }

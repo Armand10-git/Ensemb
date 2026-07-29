@@ -5,6 +5,7 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationModule } from '../notifications/notification.module';
 import { SalesModule } from '../sales/sale.module';
 import { BillingModule } from '../billing/billing.module';
+import { CashSessionModule } from '../cash-sessions/cash-session.module';
 import { PosPaymentExpirationQueueModule } from './pos-payment-expiration-queue.module';
 import { PosService } from './pos.service';
 import { PosController } from './pos.controller';
@@ -23,6 +24,10 @@ import { PosWebhookController } from './pos-webhook.controller';
  * minimal) doit rester valide sans PosModule.
  * PosPaymentExpirationQueueModule : enregistre la file consommée par le worker dédié
  * (apps/api/src/workers/pos-payment-expiration.worker.ts, §17 point Z).
+ * CashSessionModule (S23b) : réutilise CashSessionService.findOpenSessionInTransaction —
+ * createSale() exige désormais une session de caisse OPEN pour (organizationId, userId,
+ * warehouseId) et y rattache la vente créée (cashSessionId), vérifié dans la même transaction
+ * Serializable pour éliminer tout TOCTOU avec une clôture concurrente.
  */
 @Module({
   imports: [
@@ -32,6 +37,7 @@ import { PosWebhookController } from './pos-webhook.controller';
     NotificationModule,
     SalesModule,
     BillingModule,
+    CashSessionModule,
     PosPaymentExpirationQueueModule,
   ],
   controllers: [PosController, PosWebhookController],
