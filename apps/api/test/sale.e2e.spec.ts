@@ -12,12 +12,17 @@
  *    stock insuffisant, isolation tenant, non-régression update()/remove() post-validation, et
  *    surtout le test de concurrence critère « Fait quand » du plan : deux validations simultanées
  *    sur le dernier exemplaire d'un produit → une seule réussit, stock jamais négatif.
+ *  - POST /sales/:id/send (S24) — enfile un job email/sms selon le contact renseigné sur le
+ *    client, 400 si contact manquant, 422 si channel invalide, isolation tenant, AuditLog tracé.
+ *    Le contenu réel du message envoyé (rendu, appel SMTP/SMS) est hors périmètre — testé
+ *    unitairement ailleurs (sale-message.renderer.spec.ts, sale.service.spec.ts).
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
@@ -135,6 +140,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,
@@ -648,5 +659,122 @@ describe('DELETE /api/v1/sales/:id', () => {
     const res = await asA('delete', `/api/v1/sales/${created.body.id}`);
 
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── POST /sales/:id/send (S24) ────────────────────────────────────────────────
+// Envoie le récapitulatif d'une vente au client par email/SMS — enfile un job BullMQ
+// fire-and-forget sur les queues 'email'/'sms' déclarées par MessagingQueueModule (mode
+// test, aucun appel réseau réel). Client dédié à ce describe (email + téléphone renseignés),
+// distinct de clientAId (sans contact renseigné, réutilisé tel quel par les tests précédents)
+// pour ne risquer aucune régression sur les describe blocks en amont.
+
+describe('POST /api/v1/sales/:id/send', () => {
+  let clientContactId: string;
+
+  beforeAll(async () => {
+    const client = await prisma.client.create({
+      data: {
+        organizationId: orgAId,
+        name: `Client Sale Contact ${SUFFIX}`,
+        code: 2,
+        email: `client-send-${SUFFIX}@e2e.cm`,
+        phone: '+237690000000',
+      },
+    });
+    clientContactId = client.id;
+  });
+
+  async function createSale(clientId: string): Promise<string> {
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — channel email, client avec email renseigné → job enfilé', async () => {
+    const saleId = await createSale(clientContactId);
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'email' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it('202 — channel sms, client avec téléphone renseigné → job enfilé', async () => {
+    const saleId = await createSale(clientContactId);
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — channel email, client sans adresse email enregistrée", async () => {
+    // clientAId (créé dans le beforeAll global) n'a ni email ni téléphone renseignés.
+    const saleId = await createSale(clientAId);
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'email' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce client n'a pas d'adresse email enregistrée.");
+  });
+
+  it('400 — channel sms, client sans numéro de téléphone enregistré', async () => {
+    const saleId = await createSale(clientAId);
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce client n'a pas de numéro de téléphone enregistré.");
+  });
+
+  it('422 — channel absent ou invalide', async () => {
+    const saleId = await createSale(clientContactId);
+
+    const resMissing = await asA('post', `/api/v1/sales/${saleId}/send`).send({});
+    expect(resMissing.status).toBe(422);
+
+    const resInvalid = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'fax' });
+    expect(resInvalid.status).toBe(422);
+  });
+
+  it('404 — vente inexistante', async () => {
+    const res = await asA('post', '/api/v1/sales/00000000-0000-0000-0000-000000000000/send').send({
+      channel: 'email',
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer une vente de org A', async () => {
+    const saleId = await createSale(clientContactId);
+
+    const res = await asB('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'email' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('202 — AuditLog tracé (action sales.send) après un envoi réussi', async () => {
+    const saleId = await createSale(clientContactId);
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/send`).send({ channel: 'email' });
+    expect(res.status).toBe(202);
+
+    // AuditInterceptor persiste l'AuditLog en fire-and-forget (void, non attendu par la
+    // réponse HTTP) — send() ne fait qu'un findUnique + queue.add, donc la réponse 202 revient
+    // souvent avant que l'INSERT ne soit committé. Même pause que notification.e2e.spec.ts
+    // (createForOrg, même patron fire-and-forget) pour laisser l'écriture se terminer.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const auditLog = await prisma.auditLog.findFirst({
+      where: { entity: 'Sale', entityId: saleId, action: 'sales.send' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    expect(auditLog!.actorType).toBe('USER');
   });
 });

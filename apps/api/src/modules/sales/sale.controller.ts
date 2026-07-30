@@ -26,6 +26,7 @@ import { SaleService } from './sale.service';
 import { CreateSaleSchema } from './dto/create-sale.dto';
 import { UpdateSaleSchema } from './dto/update-sale.dto';
 import { CancelSaleSchema } from './dto/cancel-sale.dto';
+import { SendSaleSchema } from './dto/send-sale.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 const UUID_RE =
@@ -53,6 +54,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   PATCH  /api/v1/sales/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/sales/:id/validate → 200 (S21 — PENDING → COMPLETED, mouvemente le stock)
  *   PATCH  /api/v1/sales/:id/cancel  → 200 (S21b — COMPLETED → CANCELLED, restitue le stock)
+ *   POST   /api/v1/sales/:id/send    → 202 (S24 — envoi asynchrone du récapitulatif par email/SMS)
  *   DELETE /api/v1/sales/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -191,6 +193,33 @@ export class SaleController {
       reason: result.data.reason,
       actorId: req.user.id,
     });
+  }
+
+  /**
+   * POST /api/v1/sales/:id/send
+   * Envoie le récapitulatif d'une vente au client par email ou SMS (S24, §18.3 étape 4) —
+   * enfile un job BullMQ traité de façon asynchrone par un worker dédié (202 Accepted,
+   * pas d'attente de l'envoi réel). channel: 'email' | 'sms' dans le body.
+   *
+   * Réutilise la permission `sales.view` plutôt qu'une nouvelle permission dédiée : envoyer
+   * le récapitulatif est une action de partage sur une ressource déjà consultable par
+   * l'utilisateur (pas une mutation de la vente elle-même) — décision actée pour S24, ne
+   * pas créer d'entrée de seed pour une permission `sales.send` distincte.
+   */
+  @RequirePermission('sales.view')
+  @Post(':id/send')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'sales.send', entity: 'Sale' })
+  send(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ) {
+    const result = SendSaleSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.saleService.send(id, req.user.organizationId, result.data.channel);
   }
 
   /**

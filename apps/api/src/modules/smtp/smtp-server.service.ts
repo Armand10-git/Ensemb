@@ -55,6 +55,26 @@ export class SmtpServerService {
   }
 
   /**
+   * Retourne la configuration SMTP (hors mot de passe) d'une organisation, ou `null`
+   * si aucune configuration n'existe — contrairement à getDecryptedPassword(), cette
+   * méthode ne lève JAMAIS d'exception : c'est à l'appelant (EmailService) de décider
+   * du comportement (mode test vs erreur) selon l'absence de configuration (S24).
+   */
+  async findForOrg(organizationId: string): Promise<{
+    host: string;
+    port: number;
+    username: string;
+    fromEmail: string;
+    fromName: string;
+  } | null> {
+    const record = await this.prisma.smtpServer.findUnique({
+      where: { organizationId },
+      select: { host: true, port: true, username: true, fromEmail: true, fromName: true },
+    });
+    return record ?? null;
+  }
+
+  /**
    * Retourne le mot de passe déchiffré — usage interne uniquement (email-queue).
    * Non exposé via controller.
    */

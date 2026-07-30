@@ -6,6 +6,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DocumentStatus, DocumentType, PaymentStatus, Prisma } from '@prisma/client';
 import { convertToBase } from '@ensemb/utils';
@@ -131,7 +133,10 @@ const DETAIL_SELECT = {
 } as const;
 
 const CLIENT_WAREHOUSE_INCLUDE = {
-  client: { select: { id: true, name: true } },
+  // email/phone ajoutés en S24 (envoi email/SMS du récapitulatif) — ajout additif,
+  // ne casse aucun usage existant (create/validate/cancel/findOne ignorent simplement
+  // ces deux champs supplémentaires).
+  client: { select: { id: true, name: true, email: true, phone: true } },
   warehouse: { select: { id: true, name: true } },
 } as const;
 
@@ -175,6 +180,13 @@ export class SaleService {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly productWarehouseService: ProductWarehouseService,
     private readonly notificationService: NotificationService,
+    // Files BullMQ d'envoi de récapitulatif de vente (S24) — le worker recharge lui-même
+    // la vente à partir de saleId, aucun autre payload que l'organisationId/saleId/to
+    // n'est transporté (§17 point 12 — tout job transporte son organizationId).
+    @InjectQueue('email')
+    private readonly emailQueue: Queue<{ organizationId: string; saleId: string; to: string }>,
+    @InjectQueue('sms')
+    private readonly smsQueue: Queue<{ organizationId: string; saleId: string; to: string }>,
   ) {}
 
   /**
@@ -471,6 +483,58 @@ export class SaleService {
     }
 
     return sale;
+  }
+
+  /**
+   * Envoie le récapitulatif d'une vente au client par email ou SMS (S24, §18.3 étape 4).
+   * Enfile un job BullMQ ('sale.sendEmail' ou 'sale.sendSms', file 'email'/'sms') consommé
+   * par un worker dédié qui recharge lui-même la vente et compose le message — cette
+   * méthode ne fait aucun appel réseau synchrone (fire-and-forget, patron identique au
+   * paiement mobile money POS, S22) et retourne dès que le job est enfilé.
+   *
+   * Aucune restriction de statut : le parcours métier (§18.3 étape 4) n'en impose aucune,
+   * une vente PENDING, COMPLETED ou CANCELLED peut être partagée.
+   *
+   * @param id - identifiant de la vente à envoyer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param channel - canal d'envoi : 'email' (nécessite client.email) ou 'sms' (nécessite client.phone).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
+   * @throws NotFoundException si la vente est introuvable ou soft-supprimée.
+   * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
+   * @throws BadRequestException si le client n'a pas de contact enregistré pour le canal demandé.
+   */
+  async send(
+    id: string,
+    organizationId: string,
+    channel: 'email' | 'sms',
+  ): Promise<{ status: 'queued' }> {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id },
+      select: { ...SALE_SELECT, ...CLIENT_WAREHOUSE_INCLUDE },
+    });
+
+    if (!sale || sale.deletedAt !== null) {
+      throw new NotFoundException('Vente introuvable.');
+    }
+    if (sale.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    if (channel === 'email') {
+      const to = sale.client.email;
+      if (!to) {
+        throw new BadRequestException("Ce client n'a pas d'adresse email enregistrée.");
+      }
+      await this.emailQueue.add('sale.sendEmail', { organizationId, saleId: id, to });
+      return { status: 'queued' };
+    }
+
+    const to = sale.client.phone;
+    if (!to) {
+      throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
+    }
+    await this.smsQueue.add('sale.sendSms', { organizationId, saleId: id, to });
+    return { status: 'queued' };
   }
 
   /**

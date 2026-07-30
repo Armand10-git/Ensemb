@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban } from 'lucide-react';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban, Mail, MessageSquare } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -29,6 +29,7 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '../../components/ui/alert-dialog';
+import { Tooltip, TooltipTrigger, TooltipContent } from '../../components/ui/tooltip';
 import { PageHeader, TableSkeleton, EmptyState, ErrorState } from '../../components/page-states';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -68,7 +69,7 @@ interface Sale {
   cancelReason: string | null;
   cancelledAt: string | null;
   createdAt: string;
-  client?: { id: string; name: string };
+  client?: { id: string; name: string; email: string | null; phone: string | null };
   warehouse?: { id: string; name: string };
   details?: SaleDetail[];
 }
@@ -230,6 +231,24 @@ function useCreateSalePayment(saleId: string) {
       void qc.invalidateQueries({ queryKey: ['sale', saleId] });
       void qc.invalidateQueries({ queryKey: ['sales'] });
     },
+  });
+}
+
+type SendChannel = 'email' | 'sms';
+
+interface SendSaleResponse { status: 'queued' }
+
+/**
+ * Envoie le récapitulatif de la vente au client par email ou SMS (§S24).
+ * Traitement asynchrone côté serveur (job en file) : la réponse 202 confirme uniquement la
+ * mise en file d'attente, jamais la livraison — l'appelant ne doit donc jamais afficher
+ * « Envoyé », seulement « Envoi en cours… ». N'invalide aucune query : l'envoi ne modifie
+ * ni le statut ni les données affichées de la vente.
+ */
+function useSendSale(saleId: string) {
+  return useMutation({
+    mutationFn: (data: { channel: SendChannel }) =>
+      api.post<SendSaleResponse>(`/sales/${saleId}/send`, data),
   });
 }
 
@@ -600,6 +619,10 @@ function SaleDetailView({
 
   const { data: payments, isLoading: paymentsLoading, isError: paymentsError } = useSalePayments(sale.id);
   const createPaymentMutation = useCreateSalePayment(sale.id);
+  const sendSaleMutation = useSendSale(sale.id);
+  // Canal en cours d'envoi — permet de désactiver/faire tourner le bon bouton (email OU sms)
+  // sans que les deux ne s'activent simultanément puisque la mutation est partagée entre eux.
+  const [sendingChannel, setSendingChannel] = useState<SendChannel | null>(null);
 
   // Solde restant — affichage uniquement, le serveur reste l'arbitre du calcul réel (§17 point A).
   const remaining = Math.max(Number(sale.grandTotal) - Number(sale.paidAmount), 0);
@@ -611,6 +634,23 @@ function SaleDetailView({
       toast.success('Paiement enregistré.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement du paiement.");
+    }
+  }
+
+  /**
+   * Déclenche l'envoi asynchrone du récapitulatif de la vente. L'API répond 202 dès la mise
+   * en file — le toast de succès reste donc au conditionnel (« Envoi en cours… »), jamais
+   * « Envoyé », puisque la livraison réelle n'est pas confirmée à ce stade.
+   */
+  async function handleSend(channel: SendChannel) {
+    setSendingChannel(channel);
+    try {
+      await sendSaleMutation.mutateAsync({ channel });
+      toast.success('Envoi en cours…');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erreur lors de l'envoi.");
+    } finally {
+      setSendingChannel(null);
     }
   }
 
@@ -636,6 +676,54 @@ function SaleDetailView({
           <p className="mb-1 text-[11.5px] text-neutral-500">Client / Entrepôt</p>
           <p className="text-[13.5px] text-neutral-800">{sale.client?.name ?? sale.clientId} — {sale.warehouse?.name ?? sale.warehouseId}</p>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={sale.client?.email ? undefined : 0}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!sale.client?.email}
+                loading={sendingChannel === 'email' && sendSaleMutation.isPending}
+                onClick={() => void handleSend('email')}
+              >
+                {sendingChannel === 'email' && sendSaleMutation.isPending
+                  ? 'Envoi…'
+                  : (<><Mail className="h-3.5 w-3.5" />Envoyer par email</>)}
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {sale.client?.email
+              ? 'Envoyer le récapitulatif par email'
+              : "Ce client n'a pas d'adresse email enregistrée."}
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={sale.client?.phone ? undefined : 0}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!sale.client?.phone}
+                loading={sendingChannel === 'sms' && sendSaleMutation.isPending}
+                onClick={() => void handleSend('sms')}
+              >
+                {sendingChannel === 'sms' && sendSaleMutation.isPending
+                  ? 'Envoi…'
+                  : (<><MessageSquare className="h-3.5 w-3.5" />Envoyer par SMS</>)}
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {sale.client?.phone
+              ? 'Envoyer le récapitulatif par SMS'
+              : "Ce client n'a pas de numéro de téléphone enregistré."}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       {sale.notes && (
