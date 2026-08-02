@@ -209,6 +209,8 @@ model Organization {
   sales            Sale[]
   paymentSales     PaymentSale[]
   cashSessions     CashSession[]
+  purchases        Purchase[]
+  paymentPurchases PaymentPurchase[]
 
   @@map("organizations")
 }
@@ -283,15 +285,17 @@ model User {
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  organization   Organization    @relation(fields: [organizationId], references: [id])
-  roles          RoleOnUser[]
-  adjustments    Adjustment[]
-  transfers      StockTransfer[]
-  notifications  Notification[]
-  sales          Sale[]
-  cancelledSales Sale[]          @relation("SaleCancelledBy")
-  paymentSales   PaymentSale[]
-  cashSessions   CashSession[]
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  roles            RoleOnUser[]
+  adjustments      Adjustment[]
+  transfers        StockTransfer[]
+  notifications    Notification[]
+  sales            Sale[]
+  cancelledSales   Sale[]            @relation("SaleCancelledBy")
+  paymentSales     PaymentSale[]
+  cashSessions     CashSession[]
+  purchases        Purchase[]
+  paymentPurchases PaymentPurchase[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -422,6 +426,7 @@ model Warehouse {
   transfersTo    StockTransfer[]    @relation("TransferTo")
   sales          Sale[]
   cashSessions   CashSession[]
+  purchases      Purchase[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
@@ -519,6 +524,7 @@ model Product {
   adjustmentDetails AdjustmentDetail[]
   transferDetails   StockTransferDetail[]
   saleDetails       SaleDetail[]
+  purchaseDetails   PurchaseDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -641,6 +647,7 @@ model Provider {
   address        String?
   deletedAt      DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
+  purchases      Purchase[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -661,6 +668,8 @@ enum DocumentType {
   ADJUSTMENT
   /// Paiement d'une vente (S20) — séquence globale par organisation, indépendante de Sale.
   PAYMENT_SALE
+  /// Paiement d'un achat fournisseur (S25) — séquence globale par organisation, indépendante de Purchase.
+  PAYMENT_PURCHASE
   /// Session de caisse (S23b) — préfixe CS
   CASH_SESSION
 }
@@ -984,6 +993,117 @@ model PaymentSale {
 
   @@index([organizationId, saleId])
   @@map("payment_sales")
+}
+
+// ─── Achats fournisseurs (S25 — Bloc F, §18.7) ───────────────────────────────
+
+/// En-tête d'un achat fournisseur (S25 — Bloc F, §18.7).
+/// Mirror exact de Sale, en sens inverse : validate() incrémente le stock au lieu de le
+/// décrémenter. Pas de isPos (n'existe que pour les ventes POS), pas de cashSessionId
+/// (aucun lien caisse pour un achat). status ne prend que PENDING/COMPLETED/CANCELLED en
+/// pratique dans cette session (AWAITING_PAYMENT n'a de sens que pour le mobile money POS,
+/// enum partagé DocumentStatus). PAS de cancelReason/cancelledAt/cancelledById : cancel()
+/// n'est pas implémenté dans cette session (purchases.cancel existe déjà en seed mais
+/// aucune session du plan ne le couvre encore) — ces colonnes n'arriveront qu'avec la
+/// session qui implémentera l'annulation, comme Sale ne les a reçues qu'en S21b (pas S19).
+model Purchase {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "ACH-2026-000001")
+  reference      String
+  date           DateTime
+  userId         String         @db.Uuid
+  providerId     String         @db.Uuid
+  warehouseId    String         @db.Uuid
+  taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
+  taxAmount      Decimal?       @default(0) @db.Decimal(14, 3)
+  discount       Decimal?       @default(0) @db.Decimal(14, 3)
+  shipping       Decimal?       @default(0) @db.Decimal(14, 3)
+  grandTotal     Decimal        @default(0) @db.Decimal(14, 3)
+  paidAmount     Decimal        @default(0) @db.Decimal(14, 3)
+  paymentStatus  PaymentStatus  @default(UNPAID)
+  status         DocumentStatus @default(PENDING)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  provider     Provider          @relation(fields: [providerId], references: [id])
+  warehouse    Warehouse         @relation(fields: [warehouseId], references: [id])
+  user         User              @relation(fields: [userId], references: [id])
+  details      PurchaseDetail[]
+  payments     PaymentPurchase[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, userId])
+  @@index([organizationId, providerId])
+  @@index([organizationId, warehouseId])
+  @@index([organizationId, status])
+  @@index([organizationId, paymentStatus])
+  @@map("purchases")
+}
+
+/// Ligne d'un achat fournisseur (S25 — Bloc F). Mirror exact de SaleDetail, purchaseUnitId
+/// au lieu de saleUnitId. price = coût d'achat de la ligne (peut différer de Product.cost
+/// au moment T, c'est une saisie, pas une recopie automatique).
+/// L'organizationId n'est pas répété ici — hérité via purchase.organizationId.
+model PurchaseDetail {
+  id               String   @id @default(uuid()) @db.Uuid
+  purchaseId       String   @db.Uuid
+  productId        String   @db.Uuid
+  productVariantId String?  @db.Uuid
+  /// Unité d'achat choisie pour cette ligne — optionnelle, référence Unit (conversion §17)
+  purchaseUnitId   String?  @db.Uuid
+  price            Decimal  @db.Decimal(14, 3)
+  taxAmount        Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  taxMethod        String?  @default("percentage")
+  discount         Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  discountMethod   String?  @default("percentage")
+  quantity         Decimal  @db.Decimal(14, 3)
+  total            Decimal  @db.Decimal(14, 3)
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@map("purchase_details")
+}
+
+/// Paiement fournisseur encaissé sur un achat (S25 — mirror exact de PaymentSale).
+/// organizationId est dénormalisé depuis purchase.organizationId pour éviter un join sur
+/// chaque contrôle IDOR. reference générée via DocumentCounterService.nextReference avec
+/// DocumentType.PAYMENT_PURCHASE — séquence globale par organisation (format
+/// PAA-YYYY-NNNNNN), pas dérivée de la référence de l'achat.
+/// Pas de soft delete : PaymentPurchase n'est pas un document financier au sens de la règle
+/// §17 point 7 (pas de DocumentStatus propre) — la suppression est physique, la
+/// traçabilité est assurée par AuditLog (@Auditable sur la route DELETE).
+/// Purchase.paidAmount/paymentStatus sont recalculés à chaque create/update/remove par
+/// PaymentPurchaseService — jamais saisis directement (§17 point 6).
+model PaymentPurchase {
+  id             String        @id @default(uuid()) @db.Uuid
+  purchaseId     String        @db.Uuid
+  organizationId String        @db.Uuid
+  /// Utilisateur qui a encaissé le paiement
+  userId         String        @db.Uuid
+  date           DateTime
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "PAA-2026-000001")
+  reference      String
+  amount         Decimal       @db.Decimal(14, 3)
+  method         PaymentMethod
+  /// Monnaie rendue au fournisseur (paiement espèces) — Decimal obligatoire (§17 point A)
+  change         Decimal?      @default(0) @db.Decimal(14, 3)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  purchase     Purchase     @relation(fields: [purchaseId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, purchaseId])
+  @@map("payment_purchases")
 }
 
 /// Session de caisse (S23b, §18.2) : ouverture/clôture avec fond de caisse et écart de comptage.

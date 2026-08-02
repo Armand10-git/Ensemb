@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Users,
   Receipt,
+  PackagePlus,
   ShoppingCart,
   Truck,
   Warehouse,
@@ -40,7 +41,13 @@ const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: R
     ],
   },
   { label: 'Catalogue', items: [{ to: '/catalog/products', label: 'Produits', icon: Package }] },
-  { label: 'Ventes', items: [{ to: '/sales', label: 'Ventes', icon: Receipt }] },
+  {
+    label: 'Ventes & Achats',
+    items: [
+      { to: '/sales', label: 'Ventes', icon: Receipt },
+      { to: '/purchases', label: 'Achats', icon: PackagePlus },
+    ],
+  },
   {
     label: 'Inventaire',
     items: [

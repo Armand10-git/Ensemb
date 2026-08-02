@@ -112,6 +112,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   { name: 'purchases.edit', label: 'Modifier un achat' },
   { name: 'purchases.delete', label: 'Supprimer un achat' },
   { name: 'purchases.cancel', label: 'Annuler un achat' },
+  { name: 'purchases.validate', label: 'Valider un achat (mouvemente le stock)' },
 
   // Paiements d'achats
   { name: 'paymentPurchases.view', label: 'Voir les paiements fournisseur' },
