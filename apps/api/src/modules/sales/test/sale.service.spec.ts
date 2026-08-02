@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Decimal } from '@prisma/client/runtime/library';
 import { SaleService } from '../sale.service';
 import { PrismaService } from '../../../common/prisma.service';
@@ -33,6 +34,7 @@ function makeSale(overrides: Partial<{
   discount: Decimal;
   shipping: Decimal;
   details: unknown[];
+  client: { id: string; name: string; email: string | null; phone: string | null };
 }> = {}) {
   return {
     id: SALE_ID,
@@ -101,6 +103,8 @@ describe('SaleService', () => {
   let documentCounter: { nextReference: jest.Mock };
   let productWarehouseService: { adjustStock: jest.Mock };
   let notificationService: { createForOrg: jest.Mock };
+  let emailQueue: { add: jest.Mock };
+  let smsQueue: { add: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -134,6 +138,8 @@ describe('SaleService', () => {
     const rtMock    = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const pwMock    = { adjustStock: jest.fn() };
     const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
+    const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const smsQueueMock   = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -143,6 +149,8 @@ describe('SaleService', () => {
         { provide: RealtimeGateway, useValue: rtMock },
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: NotificationService, useValue: notifMock },
+        { provide: getQueueToken('email'), useValue: emailQueueMock },
+        { provide: getQueueToken('sms'), useValue: smsQueueMock },
       ],
     }).compile();
 
@@ -151,6 +159,8 @@ describe('SaleService', () => {
     documentCounter = dcMock;
     productWarehouseService = pwMock;
     notificationService = notifMock;
+    emailQueue = emailQueueMock;
+    smsQueue = smsQueueMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -291,6 +301,100 @@ describe('SaleService', () => {
 
     const call = prisma.sale.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
     expect(call.where).not.toHaveProperty('userId');
+  });
+
+  // ─── send (S24) ──────────────────────────────────────────────────────────
+
+  describe('send', () => {
+    it("channel=email, client avec email → enfile 'sale.sendEmail' sur la file email", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({ client: { id: CLIENT_ID, name: 'Client A', email: 'client@example.cm', phone: null } }),
+      );
+
+      const result = await service.send(SALE_ID, ORG_A, 'email');
+
+      expect(emailQueue.add).toHaveBeenCalledWith('sale.sendEmail', {
+        organizationId: ORG_A,
+        saleId: SALE_ID,
+        to: 'client@example.cm',
+      });
+      expect(smsQueue.add).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: 'queued' });
+    });
+
+    it("channel=sms, client avec téléphone → enfile 'sale.sendSms' sur la file sms", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({ client: { id: CLIENT_ID, name: 'Client A', email: null, phone: '+237600000000' } }),
+      );
+
+      const result = await service.send(SALE_ID, ORG_A, 'sms');
+
+      expect(smsQueue.add).toHaveBeenCalledWith('sale.sendSms', {
+        organizationId: ORG_A,
+        saleId: SALE_ID,
+        to: '+237600000000',
+      });
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: 'queued' });
+    });
+
+    it("channel=email, client sans email → BadRequestException, rien enfilé", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({ client: { id: CLIENT_ID, name: 'Client A', email: null, phone: '+237600000000' } }),
+      );
+
+      await expect(service.send(SALE_ID, ORG_A, 'email')).rejects.toThrow(
+        new BadRequestException("Ce client n'a pas d'adresse email enregistrée."),
+      );
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(smsQueue.add).not.toHaveBeenCalled();
+    });
+
+    it("channel=sms, client sans téléphone → BadRequestException, rien enfilé", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({ client: { id: CLIENT_ID, name: 'Client A', email: 'client@example.cm', phone: null } }),
+      );
+
+      await expect(service.send(SALE_ID, ORG_A, 'sms')).rejects.toThrow(
+        new BadRequestException('Ce client n\'a pas de numéro de téléphone enregistré.'),
+      );
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(smsQueue.add).not.toHaveBeenCalled();
+    });
+
+    it("vente d'une autre organisation → ForbiddenException, rien enfilé", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({
+          organizationId: ORG_B,
+          client: { id: CLIENT_ID, name: 'Client A', email: 'client@example.cm', phone: '+237600000000' },
+        }),
+      );
+
+      await expect(service.send(SALE_ID, ORG_A, 'email')).rejects.toThrow(ForbiddenException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(smsQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('vente introuvable → NotFoundException, rien enfilé', async () => {
+      prisma.sale.findUnique.mockResolvedValue(null);
+
+      await expect(service.send(SALE_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(smsQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('vente soft-supprimée → NotFoundException, rien enfilé', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({
+          deletedAt: new Date(),
+          client: { id: CLIENT_ID, name: 'Client A', email: 'client@example.cm', phone: '+237600000000' },
+        }),
+      );
+
+      await expect(service.send(SALE_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
+      expect(smsQueue.add).not.toHaveBeenCalled();
+    });
   });
 
   // ─── update ──────────────────────────────────────────────────────────────

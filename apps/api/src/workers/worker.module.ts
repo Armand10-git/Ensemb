@@ -8,10 +8,14 @@ import { PartnersModule } from '../modules/partners/partners.module';
 import { SalesModule } from '../modules/sales/sale.module';
 import { AuditModule } from '../modules/audit/audit.module';
 import { PosPaymentExpirationQueueModule } from '../modules/pos/pos-payment-expiration-queue.module';
+import { MessagingModule } from '../modules/messaging/messaging.module';
+import { MessagingQueueModule } from '../modules/messaging/messaging-queue.module';
 import { BillingWorker } from './billing.worker';
 import { BackupWorker } from './backup.worker';
 import { ExcelWorker } from './excel.worker';
 import { PosPaymentExpirationWorker } from './pos-payment-expiration.worker';
+import { SaleEmailWorker } from './sale-email.worker';
+import { SaleSmsWorker } from './sale-sms.worker';
 
 /**
  * Module chargé uniquement dans le process worker dédié (apps/api/src/worker.ts).
@@ -47,7 +51,19 @@ import { PosPaymentExpirationWorker } from './pos-payment-expiration.worker';
     // Enregistre la file 'pos-payment-expiration' (nécessaire pour @Processor('pos-payment-expiration')) —
     // module dédié plutôt que PosModule entier, pour éviter d'entraîner sa dépendance croisée vers BillingModule
     PosPaymentExpirationQueueModule,
+    // MessagingModule exporte EmailService et SmsService (S24, SaleEmailWorker/SaleSmsWorker)
+    MessagingModule,
+    // Enregistre les files 'email' et 'sms' (nécessaire pour @Processor('email')/@Processor('sms')) —
+    // module dédié plutôt que d'importer un module métier, même patron que PosPaymentExpirationQueueModule
+    MessagingQueueModule,
   ],
-  providers: [BillingWorker, BackupWorker, ExcelWorker, PosPaymentExpirationWorker],
+  providers: [
+    BillingWorker,
+    BackupWorker,
+    ExcelWorker,
+    PosPaymentExpirationWorker,
+    SaleEmailWorker,
+    SaleSmsWorker,
+  ],
 })
 export class WorkerModule {}
