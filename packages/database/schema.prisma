@@ -211,6 +211,9 @@ model Organization {
   cashSessions     CashSession[]
   purchases        Purchase[]
   paymentPurchases PaymentPurchase[]
+  saleReturns      SaleReturn[]
+  purchaseReturns  PurchaseReturn[]
+  paymentReturns   PaymentReturn[]
 
   @@map("organizations")
 }
@@ -296,6 +299,9 @@ model User {
   cashSessions     CashSession[]
   purchases        Purchase[]
   paymentPurchases PaymentPurchase[]
+  saleReturns      SaleReturn[]
+  purchaseReturns  PurchaseReturn[]
+  paymentReturns   PaymentReturn[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -410,25 +416,27 @@ model BackupExport {
 /// L'index unique partiel (organizationId, name) WHERE deleted_at IS NULL est créé
 /// en SQL raw dans la migration (Prisma ne supporte pas les index partiels dans @@unique).
 model Warehouse {
-  id             String             @id @default(uuid()) @db.Uuid
-  organizationId String             @db.Uuid
-  name           String
-  address        String?
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @db.Uuid
+  name            String
+  address         String?
   /// true = entrepôt par défaut de l'organisation (un seul par org, géré transactionnellement)
-  isDefault      Boolean            @default(false)
+  isDefault       Boolean            @default(false)
   /// Compteur de version pour le verrouillage optimiste sur les mouvements de stock (S15)
-  version        Int                @default(0)
-  deletedAt      DateTime?
-  organization   Organization       @relation(fields: [organizationId], references: [id])
-  stocks         ProductWarehouse[]
-  adjustments    Adjustment[]
-  transfersFrom  StockTransfer[]    @relation("TransferFrom")
-  transfersTo    StockTransfer[]    @relation("TransferTo")
-  sales          Sale[]
-  cashSessions   CashSession[]
-  purchases      Purchase[]
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  version         Int                @default(0)
+  deletedAt       DateTime?
+  organization    Organization       @relation(fields: [organizationId], references: [id])
+  stocks          ProductWarehouse[]
+  adjustments     Adjustment[]
+  transfersFrom   StockTransfer[]    @relation("TransferFrom")
+  transfersTo     StockTransfer[]    @relation("TransferTo")
+  sales           Sale[]
+  cashSessions    CashSession[]
+  purchases       Purchase[]
+  saleReturns     SaleReturn[]
+  purchaseReturns PurchaseReturn[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   @@index([organizationId])
   @@map("warehouses")
@@ -513,18 +521,20 @@ model Product {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization      Organization          @relation(fields: [organizationId], references: [id])
-  category          Category              @relation(fields: [categoryId], references: [id])
-  brand             Brand?                @relation(fields: [brandId], references: [id])
-  unit              Unit?                 @relation("ProductUnit", fields: [unitId], references: [id])
-  unitSale          Unit?                 @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
-  unitPurchase      Unit?                 @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
-  variants          ProductVariant[]
-  stocks            ProductWarehouse[]
-  adjustmentDetails AdjustmentDetail[]
-  transferDetails   StockTransferDetail[]
-  saleDetails       SaleDetail[]
-  purchaseDetails   PurchaseDetail[]
+  organization          Organization           @relation(fields: [organizationId], references: [id])
+  category              Category               @relation(fields: [categoryId], references: [id])
+  brand                 Brand?                 @relation(fields: [brandId], references: [id])
+  unit                  Unit?                  @relation("ProductUnit", fields: [unitId], references: [id])
+  unitSale              Unit?                  @relation("ProductUnitSale", fields: [unitSaleId], references: [id])
+  unitPurchase          Unit?                  @relation("ProductUnitPurchase", fields: [unitPurchaseId], references: [id])
+  variants              ProductVariant[]
+  stocks                ProductWarehouse[]
+  adjustmentDetails     AdjustmentDetail[]
+  transferDetails       StockTransferDetail[]
+  saleDetails           SaleDetail[]
+  purchaseDetails       PurchaseDetail[]
+  saleReturnDetails     SaleReturnDetail[]
+  purchaseReturnDetails PurchaseReturnDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -672,6 +682,8 @@ enum DocumentType {
   PAYMENT_PURCHASE
   /// Session de caisse (S23b) — préfixe CS
   CASH_SESSION
+  /// Paiement d'un retour (vente ou achat) — séquence globale par organisation, indépendante de SaleReturn/PurchaseReturn.
+  PAYMENT_RETURN
 }
 
 /// Compteur de référence par (organisation, type de document, année civile).
@@ -913,6 +925,7 @@ model Sale {
   details       SaleDetail[]
   payments      PaymentSale[]
   webhookEvents WebhookEvent[]
+  saleReturns   SaleReturn[]
 
   @@unique([organizationId, reference])
   @@index([organizationId, status])
@@ -948,6 +961,8 @@ model SaleDetail {
 
   sale    Sale    @relation(fields: [saleId], references: [id])
   product Product @relation(fields: [productId], references: [id])
+
+  saleReturnDetails SaleReturnDetail[]
 
   @@map("sale_details")
 }
@@ -1028,12 +1043,13 @@ model Purchase {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  organization Organization      @relation(fields: [organizationId], references: [id])
-  provider     Provider          @relation(fields: [providerId], references: [id])
-  warehouse    Warehouse         @relation(fields: [warehouseId], references: [id])
-  user         User              @relation(fields: [userId], references: [id])
-  details      PurchaseDetail[]
-  payments     PaymentPurchase[]
+  organization    Organization      @relation(fields: [organizationId], references: [id])
+  provider        Provider          @relation(fields: [providerId], references: [id])
+  warehouse       Warehouse         @relation(fields: [warehouseId], references: [id])
+  user            User              @relation(fields: [userId], references: [id])
+  details         PurchaseDetail[]
+  payments        PaymentPurchase[]
+  purchaseReturns PurchaseReturn[]
 
   @@unique([organizationId, reference])
   @@index([organizationId, userId])
@@ -1067,6 +1083,8 @@ model PurchaseDetail {
 
   purchase Purchase @relation(fields: [purchaseId], references: [id])
   product  Product  @relation(fields: [productId], references: [id])
+
+  purchaseReturnDetails PurchaseReturnDetail[]
 
   @@map("purchase_details")
 }
@@ -1138,4 +1156,216 @@ model CashSession {
   @@unique([organizationId, reference])
   @@index([organizationId, userId, status])
   @@map("cash_sessions")
+}
+
+// ─── Retours de vente et d'achat (S26 — Bloc F/E, §18.6) ─────────────────────
+
+/// En-tête d'un retour de vente (S26, §18.6). Mirror de Sale, sans isPos ni cashSessionId
+/// (un retour n'est jamais un encaissement POS direct) et sans cancelReason/cancelledAt/
+/// cancelledById — pas d'annulation dans cette session, comme Purchase (S25). validate()
+/// restitue le stock au lieu de le décrémenter (sens inverse de Sale.validate() — service
+/// des agents suivants). saleId référence le document de vente d'origine — obligatoire,
+/// un retour ne peut exister sans vente source. Les lignes (SaleReturnDetail) référencent
+/// en plus la SaleDetail précise, pour borner la quantité retournable cumulée et pour la
+/// vérification anti-IDOR (une ligne de retour doit référencer une SaleDetail qui
+/// appartient bien au Sale déclaré). Soft delete uniquement (deletedAt) — mêmes règles
+/// d'immuabilité que Sale/Purchase (§17 point 7).
+model SaleReturn {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "RVT-2026-000001")
+  reference      String
+  date           DateTime
+  userId         String         @db.Uuid
+  /// Vente d'origine — le retour ne peut porter que sur les lignes de ce document
+  saleId         String         @db.Uuid
+  warehouseId    String         @db.Uuid
+  /// Taux de TVA global — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
+  taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Montant de TVA global si taxMethod global = "fixed"
+  taxAmount      Decimal?       @default(0) @db.Decimal(14, 3)
+  discount       Decimal?       @default(0) @db.Decimal(14, 3)
+  shipping       Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Total calculé côté serveur — jamais depuis le body client (§17 point A)
+  grandTotal     Decimal        @default(0) @db.Decimal(14, 3)
+  /// Somme des paiements (remboursements) — recalculé par PaymentReturnService
+  paidAmount     Decimal        @default(0) @db.Decimal(14, 3)
+  paymentStatus  PaymentStatus  @default(UNPAID)
+  status         DocumentStatus @default(PENDING)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id])
+  sale         Sale               @relation(fields: [saleId], references: [id])
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id])
+  user         User               @relation(fields: [userId], references: [id])
+  details      SaleReturnDetail[]
+  payments     PaymentReturn[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([organizationId, paymentStatus])
+  /// Chemin le plus fréquent de findAll (viewAll=false, §17 — index requis pour toute requête filtrée)
+  @@index([organizationId, userId])
+  @@index([organizationId, warehouseId])
+  /// Nécessaire pour sommer les quantités déjà retournées sur un document de vente donné.
+  @@index([organizationId, saleId])
+  @@map("sale_returns")
+}
+
+/// Ligne d'un retour de vente (S26). Mirror de SaleDetail, avec en plus saleDetailId qui
+/// pointe la ligne d'origine précise (pas seulement le document) — essentiel pour borner
+/// la quantité retournable cumulée et pour la vérification anti-IDOR (une SaleDetail doit
+/// appartenir au Sale référencé par le SaleReturn parent — vérifié en application).
+/// L'organizationId n'est pas répété ici — hérité via saleReturn.organizationId.
+model SaleReturnDetail {
+  id               String   @id @default(uuid()) @db.Uuid
+  saleReturnId     String   @db.Uuid
+  /// Ligne de vente d'origine précise — voir commentaire du modèle
+  saleDetailId     String   @db.Uuid
+  productId        String   @db.Uuid
+  productVariantId String?  @db.Uuid
+  /// Unité de retour choisie pour cette ligne — optionnelle, mirror saleUnitId (conversion §17)
+  returnUnitId     String?  @db.Uuid
+  price            Decimal  @db.Decimal(14, 3)
+  taxAmount        Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  taxMethod        String?  @default("percentage")
+  discount         Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  discountMethod   String?  @default("percentage")
+  quantity         Decimal  @db.Decimal(14, 3)
+  total            Decimal  @db.Decimal(14, 3)
+
+  saleReturn SaleReturn @relation(fields: [saleReturnId], references: [id])
+  saleDetail SaleDetail @relation(fields: [saleDetailId], references: [id])
+  product    Product    @relation(fields: [productId], references: [id])
+
+  /// Utilisé pour sommer les quantités déjà retournées sur cette ligne d'origine à travers
+  /// tous les retours (borne anti-sur-retour).
+  @@index([saleDetailId])
+  @@map("sale_return_details")
+}
+
+/// En-tête d'un retour fournisseur (S26). Mirror de Purchase, avec purchaseId au lieu de
+/// providerId — le retour référence l'achat d'origine, pas directement le fournisseur
+/// (mirror strict du besoin, cf. SaleReturn.saleId). validate() décrémente le stock au
+/// lieu de l'incrémenter (sens inverse de Purchase.validate() — service des agents
+/// suivants). Pas de cancelReason/cancelledAt/cancelledById, comme Purchase (S25).
+model PurchaseReturn {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "RAC-2026-000001")
+  reference      String
+  date           DateTime
+  userId         String         @db.Uuid
+  /// Achat d'origine — le retour ne peut porter que sur les lignes de ce document
+  purchaseId     String         @db.Uuid
+  warehouseId    String         @db.Uuid
+  taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
+  taxAmount      Decimal?       @default(0) @db.Decimal(14, 3)
+  discount       Decimal?       @default(0) @db.Decimal(14, 3)
+  shipping       Decimal?       @default(0) @db.Decimal(14, 3)
+  grandTotal     Decimal        @default(0) @db.Decimal(14, 3)
+  paidAmount     Decimal        @default(0) @db.Decimal(14, 3)
+  paymentStatus  PaymentStatus  @default(UNPAID)
+  status         DocumentStatus @default(PENDING)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id])
+  purchase     Purchase               @relation(fields: [purchaseId], references: [id])
+  warehouse    Warehouse              @relation(fields: [warehouseId], references: [id])
+  user         User                   @relation(fields: [userId], references: [id])
+  details      PurchaseReturnDetail[]
+  payments     PaymentReturn[]
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([organizationId, paymentStatus])
+  @@index([organizationId, userId])
+  @@index([organizationId, warehouseId])
+  /// Nécessaire pour sommer les quantités déjà retournées sur un document d'achat donné.
+  @@index([organizationId, purchaseId])
+  @@map("purchase_returns")
+}
+
+/// Ligne d'un retour fournisseur (S26). Mirror de PurchaseDetail, avec en plus
+/// purchaseDetailId qui pointe la ligne d'achat d'origine précise — même rôle que
+/// SaleReturnDetail.saleDetailId (borne de quantité + anti-IDOR).
+/// L'organizationId n'est pas répété ici — hérité via purchaseReturn.organizationId.
+model PurchaseReturnDetail {
+  id               String   @id @default(uuid()) @db.Uuid
+  purchaseReturnId String   @db.Uuid
+  /// Ligne d'achat d'origine précise — voir commentaire du modèle
+  purchaseDetailId String   @db.Uuid
+  productId        String   @db.Uuid
+  productVariantId String?  @db.Uuid
+  /// Unité de retour choisie pour cette ligne — optionnelle, mirror purchaseUnitId (conversion §17)
+  returnUnitId     String?  @db.Uuid
+  price            Decimal  @db.Decimal(14, 3)
+  taxAmount        Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  taxMethod        String?  @default("percentage")
+  discount         Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  discountMethod   String?  @default("percentage")
+  quantity         Decimal  @db.Decimal(14, 3)
+  total            Decimal  @db.Decimal(14, 3)
+
+  purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id])
+  purchaseDetail PurchaseDetail @relation(fields: [purchaseDetailId], references: [id])
+  product        Product        @relation(fields: [productId], references: [id])
+
+  /// Utilisé pour sommer les quantités déjà retournées sur cette ligne d'origine à travers
+  /// tous les retours (borne anti-sur-retour).
+  @@index([purchaseDetailId])
+  @@map("purchase_return_details")
+}
+
+/// Paiement (remboursement) enregistré sur un retour, vente ou achat (S26). Mirror de
+/// PaymentSale/PaymentPurchase, mais avec deux FK nullables en parallèle — parallèle exact
+/// du patron WebhookEvent.saleId/invoiceId : exactement un des deux (saleReturnId,
+/// purchaseReturnId) doit être renseigné. Invariant vérifié en application (services des
+/// agents suivants) ET par une contrainte CHECK SQL (num_nonnulls) ajoutée à la main dans
+/// la migration — défense en profondeur, jamais uniquement applicatif sur un invariant
+/// critique (cf. philosophie RLS du projet, §17 point T).
+/// reference générée via DocumentCounterService.nextReference avec
+/// DocumentType.PAYMENT_RETURN — séquence globale par organisation (format
+/// REM-YYYY-NNNNNN), indépendante de SaleReturn/PurchaseReturn.
+/// Pas de soft delete : comme PaymentSale/PaymentPurchase, ce n'est pas un document
+/// financier au sens de la règle §17 point 7 — suppression physique, traçabilité par
+/// AuditLog (@Auditable sur la route DELETE).
+model PaymentReturn {
+  id               String          @id @default(uuid()) @db.Uuid
+  organizationId   String          @db.Uuid
+  /// Retour de vente concerné — exactement un des deux (saleReturnId, purchaseReturnId) est non-null
+  saleReturnId     String?         @db.Uuid
+  saleReturn       SaleReturn?     @relation(fields: [saleReturnId], references: [id])
+  /// Retour fournisseur concerné — exactement un des deux (saleReturnId, purchaseReturnId) est non-null
+  purchaseReturnId String?         @db.Uuid
+  purchaseReturn   PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
+  /// Utilisateur qui a enregistré le paiement
+  userId           String          @db.Uuid
+  date             DateTime
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "REM-2026-000001")
+  reference        String
+  amount           Decimal         @db.Decimal(14, 3)
+  method           PaymentMethod
+  /// Monnaie rendue (paiement espèces) — Decimal obligatoire (§17 point A)
+  change           Decimal?        @default(0) @db.Decimal(14, 3)
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, saleReturnId])
+  @@index([organizationId, purchaseReturnId])
+  @@map("payment_returns")
 }

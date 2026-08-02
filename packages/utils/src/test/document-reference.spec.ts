@@ -32,4 +32,8 @@ describe('formatReference', () => {
   it('PAYMENT_PURCHASE counter=1 → PAA-2026-000001 (S25 — paiements d\'achats)', () => {
     expect(formatReference('PAYMENT_PURCHASE', 2026, 1)).toBe('PAA-2026-000001');
   });
+
+  it('PAYMENT_RETURN counter=1 → REM-2026-000001 (S26 — paiements de retours)', () => {
+    expect(formatReference('PAYMENT_RETURN', 2026, 1)).toBe('REM-2026-000001');
+  });
 });
