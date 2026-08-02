@@ -26,6 +26,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { NotificationModule } from './modules/notifications/notification.module';
 import { SalesModule } from './modules/sales/sale.module';
+import { PurchasesModule } from './modules/purchases/purchase.module';
 import { CashSessionModule } from './modules/cash-sessions/cash-session.module';
 import { PosModule } from './modules/pos/pos.module';
 
@@ -65,6 +66,7 @@ import { PosModule } from './modules/pos/pos.module';
     InventoryModule,
     NotificationModule,
     SalesModule,
+    PurchasesModule,
     CashSessionModule,
     PosModule,
   ],

@@ -8,6 +8,7 @@ export type DocumentType =
   | 'TRANSFER'
   | 'ADJUSTMENT'
   | 'PAYMENT_SALE'
+  | 'PAYMENT_PURCHASE'
   | 'CASH_SESSION';
 
 const PREFIXES: Record<DocumentType, string> = {
@@ -19,6 +20,7 @@ const PREFIXES: Record<DocumentType, string> = {
   TRANSFER: 'TRF',
   ADJUSTMENT: 'AJT',
   PAYMENT_SALE: 'PAY',
+  PAYMENT_PURCHASE: 'PAA',
   CASH_SESSION: 'CS',
 };
 
