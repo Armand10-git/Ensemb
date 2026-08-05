@@ -95,6 +95,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Retours de ventes
   { name: 'saleReturns.view', label: 'Voir les retours de ventes' },
   { name: 'saleReturns.create', label: 'Créer un retour de vente' },
+  { name: 'saleReturns.validate', label: 'Valider un retour de vente (mouvemente le stock)' },
   { name: 'saleReturns.edit', label: 'Modifier un retour de vente' },
   { name: 'saleReturns.delete', label: 'Supprimer un retour de vente' },
 
@@ -123,6 +124,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   // Retours d'achats
   { name: 'purchaseReturns.view', label: 'Voir les retours fournisseur' },
   { name: 'purchaseReturns.create', label: 'Créer un retour fournisseur' },
+  { name: 'purchaseReturns.validate', label: 'Valider un retour fournisseur (mouvemente le stock)' },
   { name: 'purchaseReturns.edit', label: 'Modifier un retour fournisseur' },
   { name: 'purchaseReturns.delete', label: 'Supprimer un retour fournisseur' },
 
