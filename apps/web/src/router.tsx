@@ -12,6 +12,8 @@ import AdjustmentsPage from './routes/adjustments/index';
 import TransfersPage   from './routes/transfers/index';
 import SalesPage       from './routes/sales/index';
 import PurchasesPage   from './routes/purchases/index';
+import SaleReturnsPage     from './routes/sale-returns/index';
+import PurchaseReturnsPage from './routes/purchase-returns/index';
 import PosPage         from './routes/pos';
 import CashSessionsPage from './routes/cash-sessions/index';
 import CustomersPage   from './routes/people/customers';
@@ -63,6 +65,8 @@ const adjustmentsRoute  = createRoute({ getParentRoute: () => appRoute, path: '/
 const transfersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/inventory/transfers',   component: TransfersPage });
 const salesRoute        = createRoute({ getParentRoute: () => appRoute, path: '/sales',                 component: SalesPage });
 const purchasesRoute    = createRoute({ getParentRoute: () => appRoute, path: '/purchases',              component: PurchasesPage });
+const saleReturnsRoute     = createRoute({ getParentRoute: () => appRoute, path: '/sale-returns',     component: SaleReturnsPage });
+const purchaseReturnsRoute = createRoute({ getParentRoute: () => appRoute, path: '/purchase-returns', component: PurchaseReturnsPage });
 const customersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/customers',      component: CustomersPage });
 const suppliersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/suppliers',      component: SuppliersPage });
 const brandsRoute       = createRoute({ getParentRoute: () => appRoute, path: '/settings/brands',       component: BrandsPage });
@@ -84,6 +88,8 @@ const routeTree = rootRoute.addChildren([
     transfersRoute,
     salesRoute,
     purchasesRoute,
+    saleReturnsRoute,
+    purchaseReturnsRoute,
     customersRoute,
     suppliersRoute,
     brandsRoute,

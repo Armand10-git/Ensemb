@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban, Mail, MessageSquare } from 'lucide-react';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban, Mail, MessageSquare, Undo2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -92,6 +93,27 @@ interface PaymentSaleResponse {
 }
 
 interface Paginated<T> { data: T[]; total: number; page: number; limit: number }
+
+// ─── Types retour de vente (S27 — création depuis SaleDetailView) ────────────
+
+/** SaleReturnDetail minimal — juste ce qu'il faut pour sommer les quantités déjà retournées par ligne. */
+interface SaleReturnDetailRef {
+  saleDetailId: string;
+  quantity: string;
+}
+
+/** SaleReturn minimal — utilisé uniquement pour calculer l'aperçu du restant retournable. */
+interface SaleReturnRef {
+  id: string;
+  saleId: string;
+  status: 'PENDING' | 'COMPLETED';
+  details?: SaleReturnDetailRef[];
+}
+
+interface SaleReturnCreated {
+  id: string;
+  reference: string;
+}
 
 interface ClientRef { id: string; name: string }
 interface WarehouseRef { id: string; name: string }
@@ -249,6 +271,49 @@ function useSendSale(saleId: string) {
   return useMutation({
     mutationFn: (data: { channel: SendChannel }) =>
       api.post<SendSaleResponse>(`/sales/${saleId}/send`, data),
+  });
+}
+
+/**
+ * Crée un retour de vente partiel (statut PENDING) — mirror useCreateSale côté retours.
+ * Invalide la liste des retours (écran sale-returns/index.tsx, S27).
+ */
+function useCreateSaleReturn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: unknown) => api.post<SaleReturnCreated>('/sale-returns', data),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['sale-returns'] }); },
+  });
+}
+
+/**
+ * Quantités déjà retournées par ligne de vente (SaleDetail.id → somme des quantités
+ * retournées), pour l'affichage indicatif du restant dans le Sheet de création de retour —
+ * le serveur reste l'arbitre final au submit (§17 point A). Le endpoint de liste
+ * (GET /sale-returns) ne renvoie pas les lignes (SALE_RETURN_SELECT n'inclut pas `details`,
+ * cf. sale-return.service.ts) : on récupère donc la liste des retours COMPLETED de cette
+ * vente, puis le détail de chacun (le nombre de retours par vente reste faible en pratique —
+ * pas de N+1 côté serveur, uniquement des appels client groupés).
+ */
+function useReturnedQuantities(saleId: string, enabled: boolean) {
+  return useQuery<Record<string, number>>({
+    queryKey: ['sale-returned-quantities', saleId],
+    queryFn: async () => {
+      const list = await api.get<Paginated<SaleReturnRef>>(
+        `/sale-returns?saleId=${saleId}&status=COMPLETED&limit=100`,
+      );
+      const details = await Promise.all(
+        list.data.map((r) => api.get<SaleReturnRef>(`/sale-returns/${r.id}`)),
+      );
+      const totals: Record<string, number> = {};
+      for (const ret of details) {
+        for (const d of ret.details ?? []) {
+          totals[d.saleDetailId] = (totals[d.saleDetailId] ?? 0) + (parseFloat(d.quantity) || 0);
+        }
+      }
+      return totals;
+    },
+    enabled,
   });
 }
 
@@ -597,6 +662,120 @@ function PaymentForm({
   );
 }
 
+// ─── Formulaire de création de retour ──────────────────────────────────────────
+
+/**
+ * Sheet de création d'un retour de vente partiel, ouvert depuis SaleDetailView pour une
+ * vente COMPLETED. Une ligne par SaleDetail de la vente ; restant = quantité vendue −
+ * déjà retourné (indicatif uniquement, `Math.max(0, …)` — le serveur reste l'arbitre final
+ * au submit). Aucun champ price/taxAmount/discount/returnUnitId n'est exposé (décision de
+ * conception S26 anti-manipulation de prix : ces valeurs sont toujours copiées côté serveur
+ * depuis la SaleDetail source) ; pas de sélecteur d'unité de retour, mirror de SaleForm qui
+ * omet déjà saleUnitId. Seules les lignes dont la quantité saisie est > 0 sont envoyées dans
+ * le payload.
+ */
+function SaleReturnForm({
+  sale,
+  products,
+  returnedQuantities,
+  onSave,
+  saving,
+}: {
+  sale: Sale;
+  products: ProductRef[];
+  returnedQuantities: Record<string, number>;
+  onSave: (data: unknown) => void;
+  saving: boolean;
+}) {
+  const [date, setDate]             = useState(new Date().toISOString().slice(0, 10));
+  const [notes, setNotes]           = useState('');
+  const [quantities, setQuantities] = useState<Record<string, string>>({});
+
+  function setQuantity(detailId: string, value: string) {
+    setQuantities((prev) => ({ ...prev, [detailId]: value }));
+  }
+
+  const rows = (sale.details ?? []).map((d) => {
+    const sold = parseFloat(d.quantity) || 0;
+    const alreadyReturned = returnedQuantities[d.id] ?? 0;
+    const remaining = Math.max(0, sold - alreadyReturned);
+    const value = quantities[d.id] ?? '0';
+    const entered = parseFloat(value) || 0;
+    const exceeds = entered > remaining;
+    return { detail: d, remaining, value, entered, exceeds };
+  });
+
+  const hasAnyQuantity = rows.some((r) => r.entered > 0);
+  const hasExcess = rows.some((r) => r.exceeds);
+  const canSubmit = date !== '' && hasAnyQuantity && !hasExcess;
+
+  function buildPayload() {
+    return {
+      saleId: sale.id,
+      date: new Date(date).toISOString(),
+      notes: notes || undefined,
+      details: rows
+        .filter((r) => r.entered > 0)
+        .map((r) => ({ saleDetailId: r.detail.id, quantity: r.value })),
+    };
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="space-y-1.5">
+        <Label>Date *</Label>
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+
+      <div>
+        <Label className="mb-2 block">Lignes à retourner</Label>
+        <div className="flex flex-col gap-2.5">
+          {rows.map(({ detail: d, remaining, value, exceeds }) => {
+            const prod = products.find((p) => p.id === d.productId);
+            return (
+              <div key={d.id} className="rounded-card border border-neutral-200 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[13.5px] font-medium text-neutral-800">
+                    {prod ? `${prod.code} — ${prod.name}` : d.productId}
+                  </p>
+                  <p className="text-[11.5px] text-neutral-500">Vendu : {d.quantity}</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11.5px] text-neutral-500">Quantité à retourner</Label>
+                  <Input
+                    value={value}
+                    max={remaining}
+                    onChange={(e) => setQuantity(d.id, e.target.value)}
+                  />
+                  <p className={cn('text-[11.5px]', exceeds ? 'text-danger-600' : 'text-neutral-500')}>
+                    {exceeds ? `Dépasse le restant (${remaining})` : `Restant : ${remaining}`}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Note</Label>
+        <Textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+          maxLength={1000}
+          placeholder="Note interne…"
+        />
+      </div>
+
+      <Button onClick={() => onSave(buildPayload())} disabled={!canSubmit} loading={saving} size="lg">
+        {!saving && 'Créer le retour'}
+        {saving && 'Création…'}
+      </Button>
+    </div>
+  );
+}
+
 // ─── Vue détail ───────────────────────────────────────────────────────────────
 
 function SaleDetailView({
@@ -615,10 +794,14 @@ function SaleDetailView({
   validating: boolean;
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+  const [returnSheetOpen, setReturnSheetOpen]   = useState(false);
 
   const { data: payments, isLoading: paymentsLoading, isError: paymentsError } = useSalePayments(sale.id);
   const createPaymentMutation = useCreateSalePayment(sale.id);
+  const createReturnMutation  = useCreateSaleReturn();
+  const { data: returnedQuantities } = useReturnedQuantities(sale.id, returnSheetOpen);
   const sendSaleMutation = useSendSale(sale.id);
   // Canal en cours d'envoi — permet de désactiver/faire tourner le bon bouton (email OU sms)
   // sans que les deux ne s'activent simultanément puisque la mutation est partagée entre eux.
@@ -634,6 +817,22 @@ function SaleDetailView({
       toast.success('Paiement enregistré.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement du paiement.");
+    }
+  }
+
+  /**
+   * Crée le retour de vente puis navigue vers l'écran des retours en pré-ouvrant son détail
+   * (deep-link `?open=<id>` — pass-through TanStack Router, aucun validateSearch requis
+   * côté route cible, cf. sale-returns/index.tsx). Toast avant navigation.
+   */
+  async function handleSaveReturn(data: unknown) {
+    try {
+      const created = await createReturnMutation.mutateAsync(data);
+      setReturnSheetOpen(false);
+      toast.success(`Retour créé. Référence : ${created.reference}`);
+      void navigate({ to: '/sale-returns', search: { open: created.id } });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Erreur lors de la création du retour.');
     }
   }
 
@@ -853,10 +1052,14 @@ function SaleDetailView({
       )}
 
       {sale.status === 'COMPLETED' && (
-        <div className="pt-1">
-          <Button variant="destructive" className="w-full" onClick={onCancel}>
+        <div className="flex gap-2.5 pt-1">
+          <Button variant="destructive" className="flex-1" onClick={onCancel}>
             <Ban className="h-4 w-4" />
             Annuler la vente
+          </Button>
+          <Button variant="secondary" onClick={() => setReturnSheetOpen(true)}>
+            <Undo2 className="h-4 w-4" />
+            Créer un retour
           </Button>
         </div>
       )}
@@ -873,6 +1076,25 @@ function SaleDetailView({
               remaining={remaining}
               onSave={(payload) => void handleSavePayment(payload)}
               saving={createPaymentMutation.isPending}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* ── Sheet création de retour ────────────────────────────────────── */}
+      <Sheet open={returnSheetOpen} onOpenChange={setReturnSheetOpen}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Créer un retour</SheetTitle>
+            <SheetDescription>Vente {sale.reference} — le total est recalculé côté serveur.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <SaleReturnForm
+              sale={sale}
+              products={products}
+              returnedQuantities={returnedQuantities ?? {}}
+              onSave={(payload) => void handleSaveReturn(payload)}
+              saving={createReturnMutation.isPending}
             />
           </div>
         </SheetContent>

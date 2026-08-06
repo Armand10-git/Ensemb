@@ -15,6 +15,7 @@ import {
   Ruler,
   Coins,
   History,
+  Undo2,
   LogOut,
   ChevronsUpDown,
   Menu,
@@ -46,6 +47,8 @@ const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: R
     items: [
       { to: '/sales', label: 'Ventes', icon: Receipt },
       { to: '/purchases', label: 'Achats', icon: PackagePlus },
+      { to: '/sale-returns', label: 'Retours de vente', icon: Undo2 },
+      { to: '/purchase-returns', label: "Retours d'achat", icon: Undo2 },
     ],
   },
   {
