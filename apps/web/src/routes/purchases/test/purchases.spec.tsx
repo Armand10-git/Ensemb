@@ -410,3 +410,98 @@ describe('PurchasesPage — Validation', () => {
     expect(screen.getByText("Valider l'achat")).toBeInTheDocument();
   });
 });
+
+// ─── Création d'un retour d'achat (S27) ──────────────────────────────────────
+
+describe('PurchasesPage — Création de retour', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const emptyReturns = { data: [], total: 0, page: 1, limit: 100 };
+
+  /**
+   * Route l'achat (avec une ligne de quantité 5, pour un plafond non trivial), les paiements
+   * (vides, non pertinents ici) et la liste des retours déjà COMPLETED sur cet achat (vide —
+   * useReturnedQuantities n'a alors aucun détail à sommer, remaining === quantité achetée).
+   */
+  function mockGet(purchaseDetail: ReturnType<typeof makePurchase>) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/providers')) return Promise.resolve(providerResp);
+      if (path.includes('/warehouses'))          return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))    return Promise.resolve(productResp);
+      if (path.includes('/payments'))            return Promise.resolve([]);
+      if (path.includes('/purchase-returns?'))   return Promise.resolve(emptyReturns);
+      if (path.includes('/purchases?'))          return Promise.resolve(purchaseListResp);
+      if (path.includes('/purchases/'))          return Promise.resolve(purchaseDetail);
+      return Promise.resolve(emptyPurchases);
+    });
+  }
+
+  function makeCompletedPurchase(overrides: Record<string, unknown> = {}) {
+    return {
+      ...makePurchase(),
+      status: 'COMPLETED',
+      details: [
+        { id: 'd1', productId: PROD_ID, productVariantId: null, purchaseUnitId: null, price: '15000', taxAmount: '0', taxMethod: 'percentage', discount: '0', discountMethod: 'percentage', quantity: '5', total: '75000' },
+      ],
+      ...overrides,
+    };
+  }
+
+  async function openDetail() {
+    renderPage();
+    await waitFor(() => screen.getByText('ACH-2026-000001'));
+    await userEvent.click(screen.getByText('ACH-2026-000001'));
+    await waitFor(() => expect(screen.getByText(/Paiements \(/)).toBeInTheDocument());
+  }
+
+  // ── Visibilité conditionnelle du bouton ──────────────────────────────────
+
+  it('le bouton "Créer un retour" est visible quand status === COMPLETED', async () => {
+    mockGet(makeCompletedPurchase());
+    await openDetail();
+
+    expect(screen.getByText('Créer un retour')).toBeInTheDocument();
+  });
+
+  it('le bouton "Créer un retour" est absent quand status === PENDING', async () => {
+    mockGet(makePurchase()); // status: 'PENDING' par défaut
+    await openDetail();
+
+    expect(screen.queryByText('Créer un retour')).not.toBeInTheDocument();
+  });
+
+  // ── Plafonnement de quantité dans le formulaire de création ──────────────
+
+  it('plafonne la quantité retournable au restant acheté : dépasser affiche une alerte et désactive la soumission', async () => {
+    mockGet(makeCompletedPurchase());
+    await openDetail();
+
+    await userEvent.click(screen.getByText('Créer un retour'));
+    await waitFor(() => screen.getByText('Restant : 5'));
+
+    // Le bouton de soumission est désactivé tant qu'aucune quantité n'est saisie (hasAnyQuantity === false).
+    expect(screen.getByText('Créer le retour')).toBeDisabled();
+
+    const quantityInput = screen.getByDisplayValue('0') as HTMLInputElement;
+    await userEvent.clear(quantityInput);
+    await userEvent.type(quantityInput, '10');
+
+    // Dépasse le restant (5 acheté) → alerte visible, soumission bloquée côté client (le
+    // serveur reste de toute façon l'arbitre final, cf. JSDoc PurchaseReturnForm).
+    await waitFor(() => expect(screen.getByText('Dépasse le restant (5)')).toBeInTheDocument());
+    expect(screen.getByText('Créer le retour')).toBeDisabled();
+
+    // Une quantité valide (≤ restant) réactive la soumission.
+    await userEvent.clear(quantityInput);
+    await userEvent.type(quantityInput, '3');
+    await waitFor(() => expect(screen.getByText('Restant : 5')).toBeInTheDocument());
+    expect(screen.getByText('Créer le retour')).not.toBeDisabled();
+  });
+
+  // Note : la soumission réelle (POST /purchase-returns) n'est pas testée ici — elle déclenche
+  // `navigate({ to: '/purchase-returns', ... })` (useNavigate de @tanstack/react-router), qui
+  // exige un RouterProvider absent de renderPage() dans ce fichier. Mirror exact du choix déjà
+  // fait côté vente (cf. sales/test/sales.spec.tsx, même limitation sur SaleDetailView).
+});

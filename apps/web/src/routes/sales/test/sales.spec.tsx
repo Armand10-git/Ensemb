@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import SalesPage from '../index';
 import { Toaster } from '../../../components/ui/sonner';
+import { TooltipProvider } from '../../../components/ui/tooltip';
 
 // ─── Mock API ─────────────────────────────────────────────────────────────────
 
@@ -63,12 +64,19 @@ const saleListResp  = { data: [makeSale()], total: 1, page: 1, limit: 20 };
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
+/**
+ * `SaleDetailView` utilise `<Tooltip>` (boutons d'envoi email/SMS, S24) — comme en
+ * production (cf. main.tsx), le rendu de test doit être enveloppé dans `TooltipProvider`,
+ * sans quoi Radix lève dès le montage : `Tooltip` must be used within `TooltipProvider`.
+ */
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <SalesPage />
-      <Toaster />
+      <TooltipProvider>
+        <SalesPage />
+        <Toaster />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -481,5 +489,83 @@ describe('SalesPage — Annulation (S21b)', () => {
     await waitFor(() => expect(screen.getByText("Erreur lors de l'annulation.")).toBeInTheDocument());
     // Le bouton "Annuler la vente" reste affiché et utilisable (statut inchangé côté serveur mocké).
     expect(screen.getByText('Annuler la vente')).toBeInTheDocument();
+  });
+});
+
+// ─── Création de retour de vente (S27) ───────────────────────────────────────────
+
+describe('SalesPage — Création de retour (S27)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Route la vente/paiements/retours (aucun retour COMPLETED préexistant → restant = quantité
+   * vendue) en plus des fixtures partagées (clients, entrepôts, produits).
+   */
+  function mockGet(saleDetail: ReturnType<typeof makeSale>) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.includes('/partners/clients')) return Promise.resolve(clientResp);
+      if (path.includes('/warehouses'))        return Promise.resolve(warehouseResp);
+      if (path.includes('/catalog/products'))  return Promise.resolve(productResp);
+      if (path.includes('/payments'))          return Promise.resolve([]);
+      if (path.includes('/sale-returns'))      return Promise.resolve({ data: [], total: 0, page: 1, limit: 100 });
+      if (path.includes('/sales?'))            return Promise.resolve(saleListResp);
+      if (path.includes('/sales/'))            return Promise.resolve(saleDetail);
+      return Promise.resolve(emptySales);
+    });
+  }
+
+  async function openDetail() {
+    renderPage();
+    await waitFor(() => screen.getByText('VTE-2026-000001'));
+    await userEvent.click(screen.getByText('VTE-2026-000001'));
+    await waitFor(() => expect(screen.getByText(/Paiements \(/)).toBeInTheDocument());
+  }
+
+  // ── Visibilité conditionnelle du bouton ──────────────────────────────────
+
+  it('le bouton "Créer un retour" est visible quand status === COMPLETED', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' });
+    await openDetail();
+
+    expect(screen.getByText('Créer un retour')).toBeInTheDocument();
+  });
+
+  it('le bouton "Créer un retour" est absent quand status === PENDING', async () => {
+    mockGet(makeSale());
+    await openDetail();
+
+    expect(screen.queryByText('Créer un retour')).not.toBeInTheDocument();
+  });
+
+  // ── Plafonnement de la quantité au restant ───────────────────────────────
+
+  it('le formulaire de retour plafonne la quantité au restant et désactive "Créer le retour" en cas de dépassement', async () => {
+    mockGet({ ...makeSale(), status: 'COMPLETED' }); // 1 ligne, quantity: '1', aucun retour préexistant
+    await openDetail();
+
+    await userEvent.click(screen.getByText('Créer un retour'));
+    await waitFor(() => screen.getByText(/Vendu : 1/));
+
+    // Localise l'unique champ de saisie de la ligne (pas de label associé par htmlFor dans ce
+    // formulaire — on cible via le conteneur de la ligne, identifié par le texte "Vendu : 1").
+    const row = screen.getByText(/Vendu : 1/).closest('.rounded-card') as HTMLElement;
+    const qtyInput = row.querySelector('input') as HTMLInputElement;
+
+    expect(screen.getByText('Restant : 1')).toBeInTheDocument();
+    expect(screen.getByText('Créer le retour')).toBeDisabled();
+
+    await userEvent.clear(qtyInput);
+    await userEvent.type(qtyInput, '2');
+
+    expect(screen.getByText('Dépasse le restant (1)')).toBeInTheDocument();
+    expect(screen.getByText('Créer le retour')).toBeDisabled();
+
+    await userEvent.clear(qtyInput);
+    await userEvent.type(qtyInput, '1');
+
+    expect(screen.getByText('Restant : 1')).toBeInTheDocument();
+    expect(screen.getByText('Créer le retour')).not.toBeDisabled();
   });
 });
