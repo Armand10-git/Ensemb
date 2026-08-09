@@ -139,6 +139,7 @@ const PERMISSIONS: { name: string; label: string }[] = [
   { name: 'quotations.create', label: 'Créer un devis' },
   { name: 'quotations.edit', label: 'Modifier un devis' },
   { name: 'quotations.delete', label: 'Supprimer un devis' },
+  { name: 'quotations.convert', label: 'Convertir un devis en vente' },
 
   // Clients & fournisseurs
   { name: 'customers.view', label: 'Voir les clients' },
