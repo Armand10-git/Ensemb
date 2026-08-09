@@ -159,6 +159,12 @@ const PERMISSIONS: { name: string; label: string }[] = [
   { name: 'expenses.edit', label: 'Modifier une dépense' },
   { name: 'expenses.delete', label: 'Supprimer une dépense' },
 
+  // Catégories de dépenses
+  { name: 'expenseCategories.view', label: 'Voir les catégories de dépenses' },
+  { name: 'expenseCategories.create', label: 'Créer une catégorie de dépense' },
+  { name: 'expenseCategories.edit', label: 'Modifier une catégorie de dépense' },
+  { name: 'expenseCategories.delete', label: 'Supprimer une catégorie de dépense' },
+
   // Rapports
   { name: 'reports.warehouse', label: 'Rapport entrepôts' },
   { name: 'reports.quantityAlerts', label: 'Rapport alertes de stock' },
