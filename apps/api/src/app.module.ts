@@ -30,6 +30,7 @@ import { PurchasesModule } from './modules/purchases/purchase.module';
 import { CashSessionModule } from './modules/cash-sessions/cash-session.module';
 import { PosModule } from './modules/pos/pos.module';
 import { ReturnsModule } from './modules/returns/returns.module';
+import { QuotationsModule } from './modules/quotations/quotation.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { ReturnsModule } from './modules/returns/returns.module';
     CashSessionModule,
     PosModule,
     ReturnsModule,
+    QuotationsModule,
   ],
 })
 export class AppModule {}

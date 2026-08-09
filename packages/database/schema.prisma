@@ -214,6 +214,7 @@ model Organization {
   saleReturns      SaleReturn[]
   purchaseReturns  PurchaseReturn[]
   paymentReturns   PaymentReturn[]
+  quotations       Quotation[]
 
   @@map("organizations")
 }
@@ -302,6 +303,7 @@ model User {
   saleReturns      SaleReturn[]
   purchaseReturns  PurchaseReturn[]
   paymentReturns   PaymentReturn[]
+  quotations       Quotation[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -435,6 +437,7 @@ model Warehouse {
   purchases       Purchase[]
   saleReturns     SaleReturn[]
   purchaseReturns PurchaseReturn[]
+  quotations      Quotation[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
@@ -535,6 +538,7 @@ model Product {
   purchaseDetails       PurchaseDetail[]
   saleReturnDetails     SaleReturnDetail[]
   purchaseReturnDetails PurchaseReturnDetail[]
+  quotationDetails      QuotationDetail[]
 
   /// Unicité (organizationId, code) — actifs et supprimés confondus (code non libéré par soft-delete)
   @@unique([organizationId, code])
@@ -634,6 +638,7 @@ model Client {
   deletedAt      DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
   sales          Sale[]
+  quotations     Quotation[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -912,6 +917,9 @@ model Sale {
   cancelledAt    DateTime?
   /// Acteur de l'annulation — null si annulée par le job d'expiration mobile money (§17 point V, S22)
   cancelledById  String?        @db.Uuid
+  /// Devis d'origine si cette vente est issue d'une conversion (S28, §18.4) — null pour une
+  /// vente créée directement. @unique : un devis se convertit en AU PLUS une vente.
+  quotationId    String?        @unique @db.Uuid
   deletedAt      DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -922,6 +930,7 @@ model Sale {
   user          User           @relation(fields: [userId], references: [id])
   cancelledBy   User?          @relation("SaleCancelledBy", fields: [cancelledById], references: [id])
   cashSession   CashSession?   @relation(fields: [cashSessionId], references: [id])
+  quotation     Quotation?     @relation(fields: [quotationId], references: [id])
   details       SaleDetail[]
   payments      PaymentSale[]
   webhookEvents WebhookEvent[]
@@ -1008,6 +1017,89 @@ model PaymentSale {
 
   @@index([organizationId, saleId])
   @@map("payment_sales")
+}
+
+// ─── Devis (S28, §18.4) ───────────────────────────────────────────────────────
+
+/// En-tête d'un devis (S28, §18.4). Mirror exact de Sale (S19), MAIS sans paymentStatus ni
+/// paidAmount (un devis n'est jamais payé — aucun cycle de paiement tant qu'il reste un
+/// devis), sans isPos ni cashSessionId (aucun lien caisse, un devis n'est jamais un
+/// encaissement POS direct) et sans cancelReason/cancelledAt/cancelledById (un devis ne
+/// s'annule pas dans cette session — pas de mouvement financier ni de stock à défaire,
+/// contrairement à Sale.cancel() en S21b).
+/// Un devis n'entraîne AUCUN mouvement de stock à aucun moment de son cycle de vie : le
+/// stock n'est décrémenté qu'à la conversion en vente (voir Sale.quotationId ci-dessous),
+/// via SaleService.create (S19), jamais ici.
+/// reference générée via DocumentCounterService.nextReference avec DocumentType.QUOTATION
+/// dans la transaction de création (§17 point X) — format DEV-YYYY-NNNNNN.
+/// grandTotal et les totaux de ligne sont calculés côté serveur uniquement, jamais depuis
+/// le body client (§17 point A).
+/// Soft delete uniquement (deletedAt) — mêmes règles d'immuabilité que Sale (§17 point 7) :
+/// un document COMPLETED est immuable, seul PENDING peut être modifié/supprimé.
+model Quotation {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "DEV-2026-000001")
+  reference      String
+  date           DateTime
+  userId         String         @db.Uuid
+  clientId       String         @db.Uuid
+  warehouseId    String         @db.Uuid
+  /// Taux de TVA global — ex. 0.1925 = 19,25 % — Decimal obligatoire (§17 point A)
+  taxRate        Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Montant de TVA global si taxMethod global = "fixed"
+  taxAmount      Decimal?       @default(0) @db.Decimal(14, 3)
+  discount       Decimal?       @default(0) @db.Decimal(14, 3)
+  shipping       Decimal?       @default(0) @db.Decimal(14, 3)
+  /// Total calculé côté serveur — jamais depuis le body client (§17 point A)
+  grandTotal     Decimal        @default(0) @db.Decimal(14, 3)
+  status         DocumentStatus @default(PENDING)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  client       Client            @relation(fields: [clientId], references: [id])
+  warehouse    Warehouse         @relation(fields: [warehouseId], references: [id])
+  user         User              @relation(fields: [userId], references: [id])
+  details      QuotationDetail[]
+  /// Vente issue de la conversion de ce devis (S28) — au plus une, Sale.quotationId est @unique.
+  /// Relation inverse portée par Sale (c'est Sale qui a la FK quotationId).
+  sale         Sale?
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, status])
+  @@index([organizationId, userId])
+  @@index([organizationId, clientId])
+  @@index([organizationId, warehouseId])
+  @@map("quotations")
+}
+
+/// Ligne d'un devis (S28). Mirror exact de SaleDetail, quoteUnitId au lieu de saleUnitId.
+/// price/taxAmount/discount/quantity/total en Decimal — jamais Float (§17 point A).
+/// L'organizationId n'est pas répété ici — hérité via quotation.organizationId.
+model QuotationDetail {
+  id               String   @id @default(uuid()) @db.Uuid
+  quotationId      String   @db.Uuid
+  productId        String   @db.Uuid
+  productVariantId String?  @db.Uuid
+  /// Unité choisie pour cette ligne — optionnelle, référence Unit (conversion §17)
+  quoteUnitId      String?  @db.Uuid
+  price            Decimal  @db.Decimal(14, 3)
+  taxAmount        Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  taxMethod        String?  @default("percentage")
+  discount         Decimal? @default(0) @db.Decimal(14, 3)
+  /// "percentage" | "fixed"
+  discountMethod   String?  @default("percentage")
+  quantity         Decimal  @db.Decimal(14, 3)
+  total            Decimal  @db.Decimal(14, 3)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@map("quotation_details")
 }
 
 // ─── Achats fournisseurs (S25 — Bloc F, §18.7) ───────────────────────────────

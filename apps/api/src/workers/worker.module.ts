@@ -6,6 +6,7 @@ import { BackupModule } from '../modules/backup/backup.module';
 import { RealtimeModule } from '../modules/realtime/realtime.module';
 import { PartnersModule } from '../modules/partners/partners.module';
 import { SalesModule } from '../modules/sales/sale.module';
+import { QuotationsModule } from '../modules/quotations/quotation.module';
 import { AuditModule } from '../modules/audit/audit.module';
 import { PosPaymentExpirationQueueModule } from '../modules/pos/pos-payment-expiration-queue.module';
 import { MessagingModule } from '../modules/messaging/messaging.module';
@@ -16,6 +17,8 @@ import { ExcelWorker } from './excel.worker';
 import { PosPaymentExpirationWorker } from './pos-payment-expiration.worker';
 import { SaleEmailWorker } from './sale-email.worker';
 import { SaleSmsWorker } from './sale-sms.worker';
+import { QuotationEmailWorker } from './quotation-email.worker';
+import { QuotationSmsWorker } from './quotation-sms.worker';
 
 /**
  * Module chargé uniquement dans le process worker dédié (apps/api/src/worker.ts).
@@ -46,6 +49,8 @@ import { SaleSmsWorker } from './sale-sms.worker';
     RealtimeModule,
     // SalesModule exporte SaleService (PosPaymentExpirationWorker réutilise cancel(), S21b/S22)
     SalesModule,
+    // QuotationsModule exporte QuotationService (nécessaire pour QuotationEmailWorker/QuotationSmsWorker)
+    QuotationsModule,
     // AuditModule exporte AuditService (journalisation directe, aucun contexte HTTP dans un processor)
     AuditModule,
     // Enregistre la file 'pos-payment-expiration' (nécessaire pour @Processor('pos-payment-expiration')) —
@@ -64,6 +69,8 @@ import { SaleSmsWorker } from './sale-sms.worker';
     PosPaymentExpirationWorker,
     SaleEmailWorker,
     SaleSmsWorker,
+    QuotationEmailWorker,
+    QuotationSmsWorker,
   ],
 })
 export class WorkerModule {}
