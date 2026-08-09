@@ -215,6 +215,8 @@ model Organization {
   purchaseReturns  PurchaseReturn[]
   paymentReturns   PaymentReturn[]
   quotations       Quotation[]
+  expenseCategories ExpenseCategory[]
+  expenses          Expense[]
 
   @@map("organizations")
 }
@@ -304,6 +306,8 @@ model User {
   purchaseReturns  PurchaseReturn[]
   paymentReturns   PaymentReturn[]
   quotations       Quotation[]
+  expenseCategories ExpenseCategory[]
+  expenses          Expense[]
 
   /// Un email est unique au sein d'un tenant, pas globalement.
   @@unique([organizationId, email])
@@ -438,6 +442,7 @@ model Warehouse {
   saleReturns     SaleReturn[]
   purchaseReturns PurchaseReturn[]
   quotations      Quotation[]
+  expenses        Expense[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
@@ -689,6 +694,8 @@ enum DocumentType {
   CASH_SESSION
   /// Paiement d'un retour (vente ou achat) — séquence globale par organisation, indépendante de SaleReturn/PurchaseReturn.
   PAYMENT_RETURN
+  /// Dépense (S29) — préfixe DEP
+  EXPENSE
 }
 
 /// Compteur de référence par (organisation, type de document, année civile).
@@ -1460,4 +1467,62 @@ model PaymentReturn {
   @@index([organizationId, saleReturnId])
   @@index([organizationId, purchaseReturnId])
   @@map("payment_returns")
+}
+
+// ─── Dépenses (S29) ───────────────────────────────────────────────────────────
+
+/// Catégorie de dépense (S29) — CRUD simple, pas de cycle de vie. Mirror structurel de
+/// Category/Brand (référentiel tenant, soft delete uniquement).
+model ExpenseCategory {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  /// Utilisateur ayant créé la catégorie
+  userId         String       @db.Uuid
+  name           String
+  description    String?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  expenses     Expense[]
+
+  @@map("expense_categories")
+}
+
+/// Dépense (S29) — CRUD simple, PAS de statut de cycle de vie (contrairement à
+/// Sale/Purchase/Quotation) : ni PENDING/COMPLETED, ni mouvement de stock, ni paiement
+/// partiel. reference générée via DocumentCounterService.nextReference avec
+/// DocumentType.EXPENSE (format DEP-YYYY-NNNNNN), dans la transaction de création
+/// (§17 point 4 — jamais MAX(reference)+1). amount : Decimal obligatoire, jamais Float
+/// (§17 point A). Soft delete uniquement (deletedAt) — pas de suppression physique.
+model Expense {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @db.Uuid
+  date              DateTime
+  /// Référence unique par organisation — générée via DocumentCounter (ex. "DEP-2026-000001")
+  reference         String
+  userId            String    @db.Uuid
+  expenseCategoryId String    @db.Uuid
+  warehouseId       String    @db.Uuid
+  /// Libellé / description libre de la dépense — obligatoire (contrairement à
+  /// ExpenseCategory.description, un complément optionnel de la catégorie).
+  details           String
+  amount            Decimal   @db.Decimal(14, 3)
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  user            User            @relation(fields: [userId], references: [id])
+  expenseCategory ExpenseCategory @relation(fields: [expenseCategoryId], references: [id])
+  warehouse       Warehouse       @relation(fields: [warehouseId], references: [id])
+
+  @@unique([organizationId, reference])
+  @@index([organizationId, expenseCategoryId])
+  @@index([organizationId, warehouseId])
+  @@index([organizationId, date])
+  @@index([organizationId, userId])
+  @@map("expenses")
 }
