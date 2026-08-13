@@ -14,6 +14,8 @@ import SalesPage       from './routes/sales/index';
 import PurchasesPage   from './routes/purchases/index';
 import SaleReturnsPage     from './routes/sale-returns/index';
 import PurchaseReturnsPage from './routes/purchase-returns/index';
+import QuotationsPage  from './routes/quotations/index';
+import ExpensesPage    from './routes/expenses/index';
 import PosPage         from './routes/pos';
 import CashSessionsPage from './routes/cash-sessions/index';
 import CustomersPage   from './routes/people/customers';
@@ -23,6 +25,7 @@ import CategoriesPage  from './routes/settings/categories';
 import UnitsPage       from './routes/settings/units';
 import CurrenciesPage  from './routes/settings/currencies';
 import WarehousesPage  from './routes/settings/warehouses';
+import ExpenseCategoriesPage from './routes/settings/expense-categories';
 
 function isAuthenticated() {
   return !!localStorage.getItem('access_token');
@@ -67,6 +70,8 @@ const salesRoute        = createRoute({ getParentRoute: () => appRoute, path: '/
 const purchasesRoute    = createRoute({ getParentRoute: () => appRoute, path: '/purchases',              component: PurchasesPage });
 const saleReturnsRoute     = createRoute({ getParentRoute: () => appRoute, path: '/sale-returns',     component: SaleReturnsPage });
 const purchaseReturnsRoute = createRoute({ getParentRoute: () => appRoute, path: '/purchase-returns', component: PurchaseReturnsPage });
+const quotationsRoute   = createRoute({ getParentRoute: () => appRoute, path: '/quotations',            component: QuotationsPage });
+const expensesRoute     = createRoute({ getParentRoute: () => appRoute, path: '/expenses',              component: ExpensesPage });
 const customersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/customers',      component: CustomersPage });
 const suppliersRoute    = createRoute({ getParentRoute: () => appRoute, path: '/people/suppliers',      component: SuppliersPage });
 const brandsRoute       = createRoute({ getParentRoute: () => appRoute, path: '/settings/brands',       component: BrandsPage });
@@ -74,6 +79,7 @@ const categoriesRoute   = createRoute({ getParentRoute: () => appRoute, path: '/
 const unitsRoute        = createRoute({ getParentRoute: () => appRoute, path: '/settings/units',        component: UnitsPage });
 const currenciesRoute   = createRoute({ getParentRoute: () => appRoute, path: '/settings/currencies',   component: CurrenciesPage });
 const warehousesRoute   = createRoute({ getParentRoute: () => appRoute, path: '/settings/warehouses',   component: WarehousesPage });
+const expenseCategoriesRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/expense-categories', component: ExpenseCategoriesPage });
 
 // ─── Arbre des routes ─────────────────────────────────────────────────────────
 
@@ -90,6 +96,8 @@ const routeTree = rootRoute.addChildren([
     purchasesRoute,
     saleReturnsRoute,
     purchaseReturnsRoute,
+    quotationsRoute,
+    expensesRoute,
     customersRoute,
     suppliersRoute,
     brandsRoute,
@@ -97,6 +105,7 @@ const routeTree = rootRoute.addChildren([
     unitsRoute,
     currenciesRoute,
     warehousesRoute,
+    expenseCategoriesRoute,
   ]),
 ]);
 
