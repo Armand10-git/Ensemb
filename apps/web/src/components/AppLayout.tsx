@@ -19,6 +19,9 @@ import {
   LogOut,
   ChevronsUpDown,
   Menu,
+  FileText,
+  Wallet,
+  Layers,
 } from 'lucide-react';
 import { NotificationBell } from './NotificationBell';
 import {
@@ -46,6 +49,7 @@ const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: R
     label: 'Ventes & Achats',
     items: [
       { to: '/sales', label: 'Ventes', icon: Receipt },
+      { to: '/quotations', label: 'Devis', icon: FileText },
       { to: '/purchases', label: 'Achats', icon: PackagePlus },
       { to: '/sale-returns', label: 'Retours de vente', icon: Undo2 },
       { to: '/purchase-returns', label: "Retours d'achat", icon: Undo2 },
@@ -56,6 +60,12 @@ const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: R
     items: [
       { to: '/inventory/adjustments', label: 'Ajustements', icon: Plus },
       { to: '/inventory/transfers', label: 'Transferts', icon: ArrowLeftRight },
+    ],
+  },
+  {
+    label: 'Finances',
+    items: [
+      { to: '/expenses', label: 'Dépenses', icon: Wallet },
     ],
   },
   {
@@ -73,6 +83,7 @@ const NAV_SECTIONS: { label: string; items: { to: string; label: string; icon: R
       { to: '/settings/brands', label: 'Marques', icon: Shapes },
       { to: '/settings/units', label: 'Unités', icon: Ruler },
       { to: '/settings/currencies', label: 'Devises', icon: Coins },
+      { to: '/settings/expense-categories', label: 'Catégories de dépenses', icon: Layers },
     ],
   },
 ];

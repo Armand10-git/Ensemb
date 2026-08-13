@@ -1174,7 +1174,12 @@ export default function SalesPage() {
   const [filterStatus, setFilterStatus]     = useState('');
 
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [detailId, setDetailId]   = useState<string | null>(null);
+  // Deep-link `?open=<id>` lu une seule fois au montage (pas de validateSearch TanStack
+  // Router — mirror exact du patron sale-returns/index.tsx, S27) : utilisé après conversion
+  // d'un devis en vente (quotations/index.tsx, S30) pour pré-ouvrir le détail de la vente créée.
+  const [detailId, setDetailId]   = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('open'),
+  );
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; reference: string } | null>(null);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; reference: string } | null>(null);
 
