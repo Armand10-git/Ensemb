@@ -191,6 +191,8 @@ export class SaleReturnService {
     private readonly productWarehouseService: ProductWarehouseService,
     @InjectQueue('email')
     private readonly emailQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
+    @InjectQueue('sms')
+    private readonly smsQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
   ) {}
 
   /**
@@ -535,25 +537,30 @@ export class SaleReturnService {
   }
 
   /**
-   * Envoie le récapitulatif d'un retour de vente au client par email (S32, mirror exact de
-   * PurchaseService.send — un seul canal email, pas de body attendu). Enfile un job BullMQ
-   * ('saleReturn.sendEmail', file 'email') consommé par return-email.worker.ts — aucun appel
-   * réseau synchrone, retourne dès que le job est enfilé.
+   * Envoie le récapitulatif d'un retour de vente au client par email ou SMS (S32/S33, mirror
+   * exact de PurchaseReturnService.send). Enfile un job BullMQ
+   * ('saleReturn.sendEmail'/'saleReturn.sendSms', file 'email'/'sms') consommé par le worker
+   * dédié — aucun appel réseau synchrone, retourne dès que le job est enfilé.
    *
    * @param id - identifiant du retour à envoyer.
    * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param channel - canal d'envoi : 'email' (nécessite client.email) ou 'sms' (nécessite client.phone).
    * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
    * @throws NotFoundException si le retour est introuvable ou soft-supprimé.
    * @throws ForbiddenException si le retour n'appartient pas à l'organisation.
-   * @throws BadRequestException si le client n'a pas d'adresse email enregistrée.
+   * @throws BadRequestException si le client n'a pas de contact enregistré pour le canal demandé.
    */
-  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+  async send(
+    id: string,
+    organizationId: string,
+    channel: 'email' | 'sms',
+  ): Promise<{ status: 'queued' }> {
     const saleReturn = await this.prisma.saleReturn.findUnique({
       where: { id },
       select: {
         organizationId: true,
         deletedAt: true,
-        sale: { select: { client: { select: { email: true } } } },
+        sale: { select: { client: { select: { email: true, phone: true } } } },
       },
     });
 
@@ -564,12 +571,20 @@ export class SaleReturnService {
       throw new ForbiddenException('Accès refusé.');
     }
 
-    const to = saleReturn.sale.client.email;
-    if (!to) {
-      throw new BadRequestException("Ce client n'a pas d'adresse email enregistrée.");
+    if (channel === 'email') {
+      const to = saleReturn.sale.client.email;
+      if (!to) {
+        throw new BadRequestException("Ce client n'a pas d'adresse email enregistrée.");
+      }
+      await this.emailQueue.add('saleReturn.sendEmail', { organizationId, returnId: id, to });
+      return { status: 'queued' };
     }
 
-    await this.emailQueue.add('saleReturn.sendEmail', { organizationId, returnId: id, to });
+    const to = saleReturn.sale.client.phone;
+    if (!to) {
+      throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
+    }
+    await this.smsQueue.add('saleReturn.sendSms', { organizationId, returnId: id, to });
     return { status: 'queued' };
   }
 

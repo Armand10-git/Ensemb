@@ -76,6 +76,8 @@ export class PaymentPurchaseService {
     private readonly documentCounter: DocumentCounterService,
     @InjectQueue('email')
     private readonly emailQueue: Queue<{ organizationId: string; paymentId: string; to: string }>,
+    @InjectQueue('sms')
+    private readonly smsQueue: Queue<{ organizationId: string; paymentId: string; to: string }>,
   ) {}
 
   /**
@@ -228,24 +230,29 @@ export class PaymentPurchaseService {
   }
 
   /**
-   * Envoie le reçu d'un paiement d'achat au fournisseur par email (S32, mirror exact de
-   * PaymentSaleService.send). Enfile un job BullMQ ('paymentPurchase.sendEmail', file 'email')
-   * consommé par payment-receipt-email.worker.ts — aucun appel réseau synchrone, retourne dès
-   * que le job est enfilé.
+   * Envoie le reçu d'un paiement d'achat au fournisseur par email ou SMS (S32/S33, mirror
+   * exact de PaymentSaleService.send). Enfile un job BullMQ
+   * ('paymentPurchase.sendEmail'/'paymentPurchase.sendSms', file 'email'/'sms') consommé par
+   * le worker dédié — aucun appel réseau synchrone, retourne dès que le job est enfilé.
    *
    * @param id - identifiant du paiement à envoyer.
    * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param channel - canal d'envoi : 'email' (nécessite provider.email) ou 'sms' (nécessite provider.phone).
    * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
    * @throws NotFoundException si le paiement est introuvable.
    * @throws ForbiddenException si le paiement n'appartient pas à l'organisation.
-   * @throws BadRequestException si le fournisseur n'a pas d'adresse email enregistrée.
+   * @throws BadRequestException si le fournisseur n'a pas de contact enregistré pour le canal demandé.
    */
-  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+  async send(
+    id: string,
+    organizationId: string,
+    channel: 'email' | 'sms',
+  ): Promise<{ status: 'queued' }> {
     const payment = await this.prisma.paymentPurchase.findUnique({
       where: { id },
       select: {
         organizationId: true,
-        purchase: { select: { provider: { select: { email: true } } } },
+        purchase: { select: { provider: { select: { email: true, phone: true } } } },
       },
     });
 
@@ -256,12 +263,20 @@ export class PaymentPurchaseService {
       throw new ForbiddenException('Accès refusé.');
     }
 
-    const to = payment.purchase.provider.email;
-    if (!to) {
-      throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+    if (channel === 'email') {
+      const to = payment.purchase.provider.email;
+      if (!to) {
+        throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+      }
+      await this.emailQueue.add('paymentPurchase.sendEmail', { organizationId, paymentId: id, to });
+      return { status: 'queued' };
     }
 
-    await this.emailQueue.add('paymentPurchase.sendEmail', { organizationId, paymentId: id, to });
+    const to = payment.purchase.provider.phone;
+    if (!to) {
+      throw new BadRequestException("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
+    }
+    await this.smsQueue.add('paymentPurchase.sendSms', { organizationId, paymentId: id, to });
     return { status: 'queued' };
   }
 

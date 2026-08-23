@@ -102,6 +102,7 @@ describe('PurchaseService', () => {
   let documentCounter: { nextReference: jest.Mock };
   let productWarehouseService: { adjustStock: jest.Mock };
   let emailQueue: { add: jest.Mock };
+  let smsQueue: { add: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -135,6 +136,7 @@ describe('PurchaseService', () => {
     const rtMock = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const pwMock = { adjustStock: jest.fn() };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -144,6 +146,7 @@ describe('PurchaseService', () => {
         { provide: RealtimeGateway, useValue: rtMock },
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
+        { provide: getQueueToken('sms'), useValue: smsQueueMock },
       ],
     }).compile();
 
@@ -152,6 +155,7 @@ describe('PurchaseService', () => {
     documentCounter = dcMock;
     productWarehouseService = pwMock;
     emailQueue = emailQueueMock;
+    smsQueue = smsQueueMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -678,10 +682,10 @@ describe('PurchaseService', () => {
       prisma.purchase.findUnique.mockResolvedValue({
         organizationId: ORG_A,
         deletedAt: null,
-        provider: { email: 'fournisseur@example.com' },
+        provider: { email: 'fournisseur@example.com', phone: null },
       });
 
-      const result = await service.send(PURCHASE_ID, ORG_A);
+      const result = await service.send(PURCHASE_ID, ORG_A, 'email');
 
       expect(result).toEqual({ status: 'queued' });
       expect(emailQueue.add).toHaveBeenCalledWith('purchase.sendEmail', {
@@ -695,17 +699,45 @@ describe('PurchaseService', () => {
       prisma.purchase.findUnique.mockResolvedValue({
         organizationId: ORG_A,
         deletedAt: null,
-        provider: { email: null },
+        provider: { email: null, phone: null },
       });
 
-      await expect(service.send(PURCHASE_ID, ORG_A)).rejects.toThrow(BadRequestException);
+      await expect(service.send(PURCHASE_ID, ORG_A, 'email')).rejects.toThrow(BadRequestException);
       expect(emailQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('enfile un job purchase.sendSms sur la file sms quand le fournisseur a un téléphone', async () => {
+      prisma.purchase.findUnique.mockResolvedValue({
+        organizationId: ORG_A,
+        deletedAt: null,
+        provider: { email: null, phone: '+237600000000' },
+      });
+
+      const result = await service.send(PURCHASE_ID, ORG_A, 'sms');
+
+      expect(result).toEqual({ status: 'queued' });
+      expect(smsQueue.add).toHaveBeenCalledWith('purchase.sendSms', {
+        organizationId: ORG_A,
+        purchaseId: PURCHASE_ID,
+        to: '+237600000000',
+      });
+    });
+
+    it("lève BadRequestException si le fournisseur n'a pas de numéro de téléphone", async () => {
+      prisma.purchase.findUnique.mockResolvedValue({
+        organizationId: ORG_A,
+        deletedAt: null,
+        provider: { email: 'fournisseur@example.com', phone: null },
+      });
+
+      await expect(service.send(PURCHASE_ID, ORG_A, 'sms')).rejects.toThrow(BadRequestException);
+      expect(smsQueue.add).not.toHaveBeenCalled();
     });
 
     it('lève NotFoundException si l\'achat est introuvable ou soft-supprimé', async () => {
       prisma.purchase.findUnique.mockResolvedValue(null);
 
-      await expect(service.send(PURCHASE_ID, ORG_A)).rejects.toThrow(NotFoundException);
+      await expect(service.send(PURCHASE_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
       expect(emailQueue.add).not.toHaveBeenCalled();
     });
 
@@ -713,10 +745,10 @@ describe('PurchaseService', () => {
       prisma.purchase.findUnique.mockResolvedValue({
         organizationId: ORG_B,
         deletedAt: null,
-        provider: { email: 'fournisseur@example.com' },
+        provider: { email: 'fournisseur@example.com', phone: null },
       });
 
-      await expect(service.send(PURCHASE_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+      await expect(service.send(PURCHASE_ID, ORG_A, 'email')).rejects.toThrow(ForbiddenException);
       expect(emailQueue.add).not.toHaveBeenCalled();
     });
   });

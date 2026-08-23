@@ -92,3 +92,18 @@ export function renderPurchaseEmailHtml(purchase: PurchaseMessageInput): string 
       <p><strong>Total général : ${formatAmount(purchase.grandTotal)}</strong></p>
     </div>`;
 }
+
+/**
+ * Construit le corps texte court du récapitulatif d'achat envoyé par SMS (S33) —
+ * mirror exact de renderSaleSmsBody (sale-message.renderer.ts).
+ *
+ * @param purchase - Sous-ensemble de l'achat nécessaire au rendu (cf. PurchaseMessageInput).
+ * @returns Un texte brut : référence, total et statut de paiement.
+ */
+export function renderPurchaseSmsBody(purchase: PurchaseMessageInput): string {
+  return (
+    `Achat ${purchase.reference} du ${formatDate(purchase.date)} — ` +
+    `Total : ${formatAmount(purchase.grandTotal)} — ` +
+    `Statut : ${paymentStatusLabel(purchase.paymentStatus)}.`
+  );
+}

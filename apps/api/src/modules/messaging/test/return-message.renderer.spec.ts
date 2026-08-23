@@ -1,5 +1,5 @@
 import { Decimal } from '@prisma/client/runtime/library';
-import { renderReturnEmailHtml } from '../return-message.renderer';
+import { renderReturnEmailHtml, renderReturnSmsBody } from '../return-message.renderer';
 import type { ReturnMessageInput, ReturnMessageLine } from '../return-message.renderer';
 
 const baseLine: ReturnMessageLine = {
@@ -90,5 +90,37 @@ describe('renderReturnEmailHtml', () => {
     const html = renderReturnEmailHtml(withoutName);
 
     expect(html).toContain('prod-1');
+  });
+});
+
+describe('renderReturnSmsBody', () => {
+  it('rend un retour de vente avec le titre "Retour vente"', () => {
+    const body = renderReturnSmsBody(baseSaleReturn);
+
+    expect(body).toContain('Retour vente');
+    expect(body).toContain('RVT-2026-0001');
+    expect(body).toMatch(/7.?000 XAF/);
+    expect(body).toContain('Validé');
+  });
+
+  it('rend un retour fournisseur avec le titre "Retour fournisseur"', () => {
+    const purchaseReturn: ReturnMessageInput = {
+      ...baseSaleReturn,
+      kind: 'purchase',
+      reference: 'RAC-2026-0001',
+      originDocumentReference: 'ACH-2026-0001',
+      counterpartyName: 'Fournisseur Test',
+    };
+
+    const body = renderReturnSmsBody(purchaseReturn);
+
+    expect(body).toContain('Retour fournisseur');
+    expect(body).toContain('RAC-2026-0001');
+  });
+
+  it('reste un texte court sans balise HTML', () => {
+    const body = renderReturnSmsBody(baseSaleReturn);
+
+    expect(body).not.toMatch(/<[^>]+>/);
   });
 });

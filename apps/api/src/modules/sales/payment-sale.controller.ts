@@ -20,6 +20,7 @@ import { Auditable } from '../audit/auditable.decorator';
 import { PaymentSaleService } from './payment-sale.service';
 import { CreatePaymentSchema } from './dto/create-payment.dto';
 import { UpdatePaymentSchema } from './dto/update-payment.dto';
+import { SendSaleSchema } from './dto/send-sale.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 /**
@@ -33,7 +34,7 @@ import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
  *   GET    /api/v1/sales/:saleId/payments  → historique chronologique des paiements
  *   POST   /api/v1/sales/:saleId/payments  → 201 (encaisse un paiement)
  *   PATCH  /api/v1/sales/payments/:id      → 200
- *   POST   /api/v1/sales/payments/:id/send → 202 (S32 — envoi asynchrone du reçu par email)
+ *   POST   /api/v1/sales/payments/:id/send → 202 (S32/S33 — envoi asynchrone du reçu par email/SMS)
  *   DELETE /api/v1/sales/payments/:id      → 204 (suppression physique, cf. service)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -100,9 +101,9 @@ export class PaymentSaleController {
 
   /**
    * POST /api/v1/sales/payments/:id/send
-   * Envoie le reçu d'un paiement de vente au client par email (S32, mirror exact de
+   * Envoie le reçu d'un paiement de vente au client par email ou SMS (S32/S33, mirror exact de
    * POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
-   * un worker dédié (202 Accepted). Un seul canal (email) cette session — pas de body attendu.
+   * un worker dédié (202 Accepted). Le canal est fourni dans le body (`{ channel }`).
    *
    * Réutilise la permission `paymentSales.view` plutôt qu'une nouvelle permission dédiée —
    * même décision que SaleController.send (S24).
@@ -114,8 +115,13 @@ export class PaymentSaleController {
   send(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
   ) {
-    return this.paymentSaleService.send(id, req.user.organizationId);
+    const result = SendSaleSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.paymentSaleService.send(id, req.user.organizationId, result.data.channel);
   }
 
   /**

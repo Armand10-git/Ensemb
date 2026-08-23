@@ -108,3 +108,19 @@ export function renderReturnEmailHtml(ret: ReturnMessageInput): string {
       <p><strong>Total général : ${formatAmount(ret.grandTotal)}</strong></p>
     </div>`;
 }
+
+/**
+ * Construit le corps texte court du récapitulatif de retour envoyé par SMS (S33) —
+ * mirror exact de renderSaleSmsBody (sale-message.renderer.ts).
+ *
+ * @param ret - Sous-ensemble du retour nécessaire au rendu (cf. ReturnMessageInput).
+ * @returns Un texte brut : référence, total et statut du retour.
+ */
+export function renderReturnSmsBody(ret: ReturnMessageInput): string {
+  const title = ret.kind === 'sale' ? 'Retour vente' : 'Retour fournisseur';
+  return (
+    `${title} ${ret.reference} du ${formatDate(ret.date)} — ` +
+    `Total : ${formatAmount(ret.grandTotal)} — ` +
+    `Statut : ${returnStatusLabel(ret.status)}.`
+  );
+}

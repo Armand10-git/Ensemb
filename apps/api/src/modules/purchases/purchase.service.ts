@@ -175,6 +175,8 @@ export class PurchaseService {
     private readonly productWarehouseService: ProductWarehouseService,
     @InjectQueue('email')
     private readonly emailQueue: Queue<{ organizationId: string; purchaseId: string; to: string }>,
+    @InjectQueue('sms')
+    private readonly smsQueue: Queue<{ organizationId: string; purchaseId: string; to: string }>,
   ) {}
 
   /**
@@ -537,23 +539,31 @@ export class PurchaseService {
   }
 
   /**
-   * Envoie le récapitulatif d'un achat au fournisseur par email (S32, mirror exact de
-   * SaleService.send — sans le paramètre `channel`, un achat n'expose que le canal email
-   * cette session, cf. plan S32). Enfile un job BullMQ ('purchase.sendEmail', file 'email')
-   * consommé par purchase-email.worker.ts — aucun appel réseau synchrone, retourne dès que
-   * le job est enfilé.
+   * Envoie le récapitulatif d'un achat au fournisseur par email ou SMS (S32/S33, mirror
+   * exact de SaleService.send). Enfile un job BullMQ ('purchase.sendEmail' ou
+   * 'purchase.sendSms', file 'email'/'sms') consommé par un worker dédié — aucun appel
+   * réseau synchrone, retourne dès que le job est enfilé.
    *
    * @param id - identifiant de l'achat à envoyer.
    * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param channel - canal d'envoi : 'email' (nécessite provider.email) ou 'sms' (nécessite provider.phone).
    * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
    * @throws NotFoundException si l'achat est introuvable ou soft-supprimé.
    * @throws ForbiddenException si l'achat n'appartient pas à l'organisation.
-   * @throws BadRequestException si le fournisseur n'a pas d'adresse email enregistrée.
+   * @throws BadRequestException si le fournisseur n'a pas de contact enregistré pour le canal demandé.
    */
-  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+  async send(
+    id: string,
+    organizationId: string,
+    channel: 'email' | 'sms',
+  ): Promise<{ status: 'queued' }> {
     const purchase = await this.prisma.purchase.findUnique({
       where: { id },
-      select: { organizationId: true, deletedAt: true, provider: { select: { email: true } } },
+      select: {
+        organizationId: true,
+        deletedAt: true,
+        provider: { select: { email: true, phone: true } },
+      },
     });
 
     if (!purchase || purchase.deletedAt !== null) {
@@ -563,12 +573,20 @@ export class PurchaseService {
       throw new ForbiddenException('Accès refusé.');
     }
 
-    const to = purchase.provider.email;
-    if (!to) {
-      throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+    if (channel === 'email') {
+      const to = purchase.provider.email;
+      if (!to) {
+        throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+      }
+      await this.emailQueue.add('purchase.sendEmail', { organizationId, purchaseId: id, to });
+      return { status: 'queued' };
     }
 
-    await this.emailQueue.add('purchase.sendEmail', { organizationId, purchaseId: id, to });
+    const to = purchase.provider.phone;
+    if (!to) {
+      throw new BadRequestException("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
+    }
+    await this.smsQueue.add('purchase.sendSms', { organizationId, purchaseId: id, to });
     return { status: 'queued' };
   }
 

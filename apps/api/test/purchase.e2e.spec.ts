@@ -717,12 +717,12 @@ describe('PATCH /api/v1/purchases/:id/validate', () => {
   );
 });
 
-// ─── POST /purchases/:id/send (S32) ────────────────────────────────────────────
-// Envoie le récapitulatif d'un achat au fournisseur par email — enfile un job BullMQ
-// fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Fournisseur dédié
-// à ce describe (email renseigné), distinct de providerAId (sans contact renseigné, réutilisé
-// tel quel par les tests précédents) pour ne risquer aucune régression sur les describe blocks
-// en amont.
+// ─── POST /purchases/:id/send (S32/S33) ────────────────────────────────────────
+// Envoie le récapitulatif d'un achat au fournisseur par email ou SMS — enfile un job BullMQ
+// fire-and-forget sur la file 'email'/'sms' (mode test, aucun appel réseau réel). Fournisseur
+// dédié à ce describe (email + téléphone renseignés), distinct de providerAId (sans contact
+// renseigné, réutilisé tel quel par les tests précédents) pour ne risquer aucune régression sur
+// les describe blocks en amont.
 
 describe('POST /api/v1/purchases/:id/send', () => {
   let providerContactId: string;
@@ -734,6 +734,7 @@ describe('POST /api/v1/purchases/:id/send', () => {
         name: `Fournisseur Purchase Contact ${SUFFIX}`,
         code: 2,
         email: `provider-send-${SUFFIX}@e2e.cm`,
+        phone: '+237600000001',
       },
     });
     providerContactId = provider.id;
@@ -749,27 +750,57 @@ describe('POST /api/v1/purchases/:id/send', () => {
     return created.body.id as string;
   }
 
-  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+  it('202 — channel email, fournisseur avec email renseigné → job enfilé', async () => {
     const purchaseId = await createPurchase(providerContactId);
 
-    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send();
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ status: 'queued' });
   });
 
-  it("400 — fournisseur sans adresse email enregistrée", async () => {
-    // providerAId (créé dans le beforeAll global) n'a pas d'email renseigné.
+  it('202 — channel sms, fournisseur avec téléphone renseigné → job enfilé', async () => {
+    const purchaseId = await createPurchase(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — channel email, fournisseur sans adresse email enregistrée", async () => {
+    // providerAId (créé dans le beforeAll global) n'a ni email ni téléphone renseignés.
     const purchaseId = await createPurchase(providerAId);
 
-    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send();
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
   });
 
+  it('400 — channel sms, fournisseur sans numéro de téléphone enregistré', async () => {
+    const purchaseId = await createPurchase(providerAId);
+
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
+  });
+
+  it('422 — channel absent ou invalide', async () => {
+    const purchaseId = await createPurchase(providerContactId);
+
+    const resMissing = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({});
+    expect(resMissing.status).toBe(422);
+
+    const resInvalid = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'fax' });
+    expect(resInvalid.status).toBe(422);
+  });
+
   it('404 — achat inexistant', async () => {
-    const res = await asA('post', '/api/v1/purchases/00000000-0000-0000-0000-000000000000/send').send();
+    const res = await asA('post', '/api/v1/purchases/00000000-0000-0000-0000-000000000000/send').send({
+      channel: 'email',
+    });
 
     expect(res.status).toBe(404);
   });
@@ -777,15 +808,15 @@ describe('POST /api/v1/purchases/:id/send', () => {
   it('403 — isolation tenant : org B ne peut pas envoyer un achat de org A', async () => {
     const purchaseId = await createPurchase(providerContactId);
 
-    const res = await asB('post', `/api/v1/purchases/${purchaseId}/send`).send();
+    const res = await asB('post', `/api/v1/purchases/${purchaseId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(403);
   });
 });
 
-// ─── POST /purchases/payments/:id/send (S32) ───────────────────────────────────
-// Envoie le reçu d'un paiement d'achat au fournisseur par email — mirror exact du describe
-// précédent, sur le paiement plutôt que sur l'achat.
+// ─── POST /purchases/payments/:id/send (S32/S33) ───────────────────────────────
+// Envoie le reçu d'un paiement d'achat au fournisseur par email ou SMS — mirror exact du
+// describe précédent, sur le paiement plutôt que sur l'achat.
 
 describe('POST /api/v1/purchases/payments/:id/send', () => {
   let providerContactId: string;
@@ -797,6 +828,7 @@ describe('POST /api/v1/purchases/payments/:id/send', () => {
         name: `Fournisseur Payment Contact ${SUFFIX}`,
         code: 3,
         email: `provider-payment-send-${SUFFIX}@e2e.cm`,
+        phone: '+237600000002',
       },
     });
     providerContactId = provider.id;
@@ -819,29 +851,59 @@ describe('POST /api/v1/purchases/payments/:id/send', () => {
     return payment.body.id as string;
   }
 
-  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+  it('202 — channel email, fournisseur avec email renseigné → job enfilé', async () => {
     const paymentId = await createPurchaseWithPayment(providerContactId);
 
-    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ status: 'queued' });
   });
 
-  it("400 — fournisseur sans adresse email enregistrée", async () => {
+  it('202 — channel sms, fournisseur avec téléphone renseigné → job enfilé', async () => {
+    const paymentId = await createPurchaseWithPayment(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — channel email, fournisseur sans adresse email enregistrée", async () => {
     const paymentId = await createPurchaseWithPayment(providerAId);
 
-    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
+  });
+
+  it('400 — channel sms, fournisseur sans numéro de téléphone enregistré', async () => {
+    const paymentId = await createPurchaseWithPayment(providerAId);
+
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
+  });
+
+  it('422 — channel absent ou invalide', async () => {
+    const paymentId = await createPurchaseWithPayment(providerContactId);
+
+    const resMissing = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({});
+    expect(resMissing.status).toBe(422);
+
+    const resInvalid = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send({
+      channel: 'fax',
+    });
+    expect(resInvalid.status).toBe(422);
   });
 
   it('404 — paiement inexistant', async () => {
     const res = await asA(
       'post',
       '/api/v1/purchases/payments/00000000-0000-0000-0000-000000000000/send',
-    ).send();
+    ).send({ channel: 'email' });
 
     expect(res.status).toBe(404);
   });
@@ -849,7 +911,7 @@ describe('POST /api/v1/purchases/payments/:id/send', () => {
   it('403 — isolation tenant : org B ne peut pas envoyer un paiement de org A', async () => {
     const paymentId = await createPurchaseWithPayment(providerContactId);
 
-    const res = await asB('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+    const res = await asB('post', `/api/v1/purchases/payments/${paymentId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(403);
   });

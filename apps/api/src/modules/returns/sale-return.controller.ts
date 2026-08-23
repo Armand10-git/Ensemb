@@ -25,6 +25,7 @@ import { ViewAllInterceptor, type ViewAllRequest } from '../../common/intercepto
 import { SaleReturnService } from './sale-return.service';
 import { CreateSaleReturnSchema } from './dto/create-sale-return.dto';
 import { UpdateSaleReturnSchema } from './dto/update-sale-return.dto';
+import { SendReturnSchema } from './dto/send-return.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 const UUID_RE =
@@ -51,7 +52,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/sale-returns/:id         → détail avec lignes, vente d'origine, entrepôt
  *   PATCH  /api/v1/sale-returns/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/sale-returns/:id/validate → 200 (PENDING → COMPLETED, incrémente le stock)
- *   POST   /api/v1/sale-returns/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
+ *   POST   /api/v1/sale-returns/:id/send    → 202 (S32/S33 — envoi asynchrone du récapitulatif par email/SMS)
  *   DELETE /api/v1/sale-returns/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -170,9 +171,9 @@ export class SaleReturnController {
 
   /**
    * POST /api/v1/sale-returns/:id/send
-   * Envoie le récapitulatif d'un retour de vente au client par email (S32, mirror exact de
-   * POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
-   * un worker dédié (202 Accepted). Un seul canal (email) cette session — pas de body attendu.
+   * Envoie le récapitulatif d'un retour de vente au client par email ou SMS (S32/S33, mirror
+   * exact de POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon
+   * asynchrone par un worker dédié (202 Accepted). Le canal est fourni dans le body (`{ channel }`).
    *
    * Réutilise la permission `saleReturns.view` plutôt qu'une nouvelle permission dédiée.
    */
@@ -183,8 +184,13 @@ export class SaleReturnController {
   send(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
   ) {
-    return this.saleReturnService.send(id, req.user.organizationId);
+    const result = SendReturnSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.saleReturnService.send(id, req.user.organizationId, result.data.channel);
   }
 
   /**

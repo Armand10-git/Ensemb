@@ -74,6 +74,7 @@ describe('SaleReturnService', () => {
   let documentCounter: { nextReference: jest.Mock };
   let productWarehouseService: { adjustStock: jest.Mock };
   let emailQueue: { add: jest.Mock };
+  let smsQueue: { add: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -106,6 +107,7 @@ describe('SaleReturnService', () => {
     const rtMock = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const pwMock = { adjustStock: jest.fn() };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -115,6 +117,7 @@ describe('SaleReturnService', () => {
         { provide: RealtimeGateway, useValue: rtMock },
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
+        { provide: getQueueToken('sms'), useValue: smsQueueMock },
       ],
     }).compile();
 
@@ -122,6 +125,7 @@ describe('SaleReturnService', () => {
     prisma = prismaMock;
     documentCounter = dcMock;
     productWarehouseService = pwMock;
+    smsQueue = smsQueueMock;
     emailQueue = emailQueueMock;
   });
 
@@ -504,7 +508,7 @@ describe('SaleReturnService', () => {
       sale: { client: { email: 'client@example.com' } },
     });
 
-    const result = await service.send(SALE_RETURN_ID, ORG_A);
+    const result = await service.send(SALE_RETURN_ID, ORG_A, 'email');
 
     expect(result).toEqual({ status: 'queued' });
     expect(emailQueue.add).toHaveBeenCalledWith('saleReturn.sendEmail', {
@@ -521,14 +525,42 @@ describe('SaleReturnService', () => {
       sale: { client: { email: null } },
     });
 
-    await expect(service.send(SALE_RETURN_ID, ORG_A)).rejects.toThrow(BadRequestException);
+    await expect(service.send(SALE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(BadRequestException);
     expect(emailQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('send : enfile un job saleReturn.sendSms sur la file sms quand le client a un téléphone', async () => {
+    prisma.saleReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      sale: { client: { phone: '+237600000000' } },
+    });
+
+    const result = await service.send(SALE_RETURN_ID, ORG_A, 'sms');
+
+    expect(result).toEqual({ status: 'queued' });
+    expect(smsQueue.add).toHaveBeenCalledWith('saleReturn.sendSms', {
+      organizationId: ORG_A,
+      returnId: SALE_RETURN_ID,
+      to: '+237600000000',
+    });
+  });
+
+  it("send : lève BadRequestException si le client n'a pas de numéro de téléphone", async () => {
+    prisma.saleReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      sale: { client: { phone: null } },
+    });
+
+    await expect(service.send(SALE_RETURN_ID, ORG_A, 'sms')).rejects.toThrow(BadRequestException);
+    expect(smsQueue.add).not.toHaveBeenCalled();
   });
 
   it('send : lève NotFoundException si le retour est introuvable ou soft-supprimé', async () => {
     prisma.saleReturn.findUnique.mockResolvedValue(null);
 
-    await expect(service.send(SALE_RETURN_ID, ORG_A)).rejects.toThrow(NotFoundException);
+    await expect(service.send(SALE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 
@@ -539,7 +571,7 @@ describe('SaleReturnService', () => {
       sale: { client: { email: 'client@example.com' } },
     });
 
-    await expect(service.send(SALE_RETURN_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+    await expect(service.send(SALE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(ForbiddenException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 });

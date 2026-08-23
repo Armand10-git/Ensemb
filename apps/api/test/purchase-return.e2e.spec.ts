@@ -777,12 +777,12 @@ describe('DELETE /api/v1/purchase-returns/:id', () => {
   });
 });
 
-// ─── POST /purchase-returns/:id/send (S32) ─────────────────────────────────────
-// Envoie le récapitulatif d'un retour fournisseur au fournisseur par email — enfile un job
-// BullMQ fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Fournisseur
-// dédié à ce describe (email renseigné) affecté à l'achat d'origine après création —
-// providerAId (utilisé par createCompletedPurchaseWithDetail) n'a pas d'email renseigné,
-// réutilisé tel quel pour le test 400.
+// ─── POST /purchase-returns/:id/send (S32/S33) ─────────────────────────────────
+// Envoie le récapitulatif d'un retour fournisseur au fournisseur par email ou SMS — enfile un
+// job BullMQ fire-and-forget sur la file 'email'/'sms' (mode test, aucun appel réseau réel).
+// Fournisseur dédié à ce describe (email + téléphone renseignés) affecté à l'achat d'origine
+// après création — providerAId (utilisé par createCompletedPurchaseWithDetail) n'a ni email ni
+// téléphone renseignés, réutilisé tel quel pour les tests 400.
 
 describe('POST /api/v1/purchase-returns/:id/send', () => {
   let providerContactId: string;
@@ -794,6 +794,7 @@ describe('POST /api/v1/purchase-returns/:id/send', () => {
         name: `Fournisseur PurchaseReturn Contact ${SUFFIX}`,
         code: 2,
         email: `provider-return-send-${SUFFIX}@e2e.cm`,
+        phone: '+237600000005',
       },
     });
     providerContactId = provider.id;
@@ -811,26 +812,58 @@ describe('POST /api/v1/purchase-returns/:id/send', () => {
     return created.body.id as string;
   }
 
-  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+  it('202 — channel email, fournisseur avec email renseigné → job enfilé', async () => {
     const returnId = await createPurchaseReturn(providerContactId);
 
-    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ status: 'queued' });
   });
 
-  it("400 — fournisseur sans adresse email enregistrée", async () => {
+  it('202 — channel sms, fournisseur avec téléphone renseigné → job enfilé', async () => {
+    const returnId = await createPurchaseReturn(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — channel email, fournisseur sans adresse email enregistrée", async () => {
     const returnId = await createPurchaseReturn(providerAId);
 
-    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
   });
 
+  it('400 — channel sms, fournisseur sans numéro de téléphone enregistré', async () => {
+    const returnId = await createPurchaseReturn(providerAId);
+
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({ channel: 'sms' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
+  });
+
+  it('422 — channel absent ou invalide', async () => {
+    const returnId = await createPurchaseReturn(providerContactId);
+
+    const resMissing = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({});
+    expect(resMissing.status).toBe(422);
+
+    const resInvalid = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send({
+      channel: 'fax',
+    });
+    expect(resInvalid.status).toBe(422);
+  });
+
   it('404 — retour inexistant', async () => {
-    const res = await asA('post', '/api/v1/purchase-returns/00000000-0000-0000-0000-000000000000/send').send();
+    const res = await asA('post', '/api/v1/purchase-returns/00000000-0000-0000-0000-000000000000/send').send({
+      channel: 'email',
+    });
 
     expect(res.status).toBe(404);
   });
@@ -838,7 +871,7 @@ describe('POST /api/v1/purchase-returns/:id/send', () => {
   it('403 — isolation tenant : org B ne peut pas envoyer un retour de org A', async () => {
     const returnId = await createPurchaseReturn(providerContactId);
 
-    const res = await asB('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+    const res = await asB('post', `/api/v1/purchase-returns/${returnId}/send`).send({ channel: 'email' });
 
     expect(res.status).toBe(403);
   });

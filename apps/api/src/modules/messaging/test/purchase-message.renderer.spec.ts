@@ -1,5 +1,5 @@
 import { Decimal } from '@prisma/client/runtime/library';
-import { renderPurchaseEmailHtml } from '../purchase-message.renderer';
+import { renderPurchaseEmailHtml, renderPurchaseSmsBody } from '../purchase-message.renderer';
 import type { PurchaseMessageInput, PurchaseMessageLine } from '../purchase-message.renderer';
 
 const baseLine: PurchaseMessageLine = {
@@ -68,5 +68,27 @@ describe('renderPurchaseEmailHtml', () => {
     const html = renderPurchaseEmailHtml(withoutName);
 
     expect(html).toContain('prod-1');
+  });
+});
+
+describe('renderPurchaseSmsBody', () => {
+  it('contient la référence, le total et le statut', () => {
+    const body = renderPurchaseSmsBody(basePurchase);
+
+    expect(body).toContain('ACH-2026-0001');
+    expect(body).toMatch(/15.?000 XAF/);
+    expect(body).toContain('Partiellement payé');
+  });
+
+  it('ne contient pas le nom du fournisseur (texte court)', () => {
+    const body = renderPurchaseSmsBody(basePurchase);
+
+    expect(body).not.toContain('Fournisseur Test');
+  });
+
+  it('reste un texte court sans balise HTML', () => {
+    const body = renderPurchaseSmsBody(basePurchase);
+
+    expect(body).not.toMatch(/<[^>]+>/);
   });
 });
