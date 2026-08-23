@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DocumentStatus, DocumentType, PaymentStatus, Prisma } from '@prisma/client';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { convertToBase } from '@ensemb/utils';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
@@ -196,6 +198,8 @@ export class PurchaseReturnService {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly productWarehouseService: ProductWarehouseService,
     private readonly notificationService: NotificationService,
+    @InjectQueue('email')
+    private readonly emailQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
   ) {}
 
   /**
@@ -530,6 +534,45 @@ export class PurchaseReturnService {
       where: { id },
       data: { deletedAt: new Date() },
     });
+  }
+
+  /**
+   * Envoie le récapitulatif d'un retour fournisseur au fournisseur par email (S32, mirror
+   * exact de SaleReturnService.send — un seul canal email, pas de body attendu). Enfile un
+   * job BullMQ ('purchaseReturn.sendEmail', file 'email') consommé par
+   * return-email.worker.ts — aucun appel réseau synchrone, retourne dès que le job est enfilé.
+   *
+   * @param id - identifiant du retour à envoyer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
+   * @throws NotFoundException si le retour est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si le retour n'appartient pas à l'organisation.
+   * @throws BadRequestException si le fournisseur n'a pas d'adresse email enregistrée.
+   */
+  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+    const purchaseReturn = await this.prisma.purchaseReturn.findUnique({
+      where: { id },
+      select: {
+        organizationId: true,
+        deletedAt: true,
+        purchase: { select: { provider: { select: { email: true } } } },
+      },
+    });
+
+    if (!purchaseReturn || purchaseReturn.deletedAt !== null) {
+      throw new NotFoundException('Retour fournisseur introuvable.');
+    }
+    if (purchaseReturn.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    const to = purchaseReturn.purchase.provider.email;
+    if (!to) {
+      throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+    }
+
+    await this.emailQueue.add('purchaseReturn.sendEmail', { organizationId, returnId: id, to });
+    return { status: 'queued' };
   }
 
   // ─── Helpers privés ──────────────────────────────────────────────────────────

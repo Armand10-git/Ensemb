@@ -22,8 +22,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
@@ -143,6 +144,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,
@@ -767,5 +774,72 @@ describe('DELETE /api/v1/purchase-returns/:id', () => {
 
     const res = await asA('delete', `/api/v1/purchase-returns/${returnId}`);
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── POST /purchase-returns/:id/send (S32) ─────────────────────────────────────
+// Envoie le récapitulatif d'un retour fournisseur au fournisseur par email — enfile un job
+// BullMQ fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Fournisseur
+// dédié à ce describe (email renseigné) affecté à l'achat d'origine après création —
+// providerAId (utilisé par createCompletedPurchaseWithDetail) n'a pas d'email renseigné,
+// réutilisé tel quel pour le test 400.
+
+describe('POST /api/v1/purchase-returns/:id/send', () => {
+  let providerContactId: string;
+
+  beforeAll(async () => {
+    const provider = await prisma.provider.create({
+      data: {
+        organizationId: orgAId,
+        name: `Fournisseur PurchaseReturn Contact ${SUFFIX}`,
+        code: 2,
+        email: `provider-return-send-${SUFFIX}@e2e.cm`,
+      },
+    });
+    providerContactId = provider.id;
+  });
+
+  async function createPurchaseReturn(providerId: string): Promise<string> {
+    const { purchaseId, purchaseDetailId } = await createCompletedPurchaseWithDetail(orgAId, adminAId, '2');
+    await prisma.purchase.update({ where: { id: purchaseId }, data: { providerId } });
+
+    const created = await asA('post', '/api/v1/purchase-returns').send({
+      purchaseId,
+      date: '2026-07-27T00:00:00.000Z',
+      details: [{ purchaseDetailId, quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+    const returnId = await createPurchaseReturn(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — fournisseur sans adresse email enregistrée", async () => {
+    const returnId = await createPurchaseReturn(providerAId);
+
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
+  });
+
+  it('404 — retour inexistant', async () => {
+    const res = await asA('post', '/api/v1/purchase-returns/00000000-0000-0000-0000-000000000000/send').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer un retour de org A', async () => {
+    const returnId = await createPurchaseReturn(providerContactId);
+
+    const res = await asB('post', `/api/v1/purchase-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(403);
   });
 });

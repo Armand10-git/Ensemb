@@ -5,6 +5,8 @@ import { SaleService } from '../modules/sales/sale.service';
 import { EmailService } from '../modules/messaging/email.service';
 import { PrismaService } from '../common/prisma.service';
 import { renderSaleEmailHtml } from '../modules/messaging/sale-message.renderer';
+import { wrapBrandedEmail } from '../modules/messaging/branded-email.template';
+import { RealtimeGateway } from '../modules/realtime/realtime.gateway';
 
 /**
  * Contrat du job de la file `email` (S24 — récapitulatif de vente par email).
@@ -44,6 +46,7 @@ export class SaleEmailWorker extends WorkerHost {
     private readonly saleService: SaleService,
     private readonly emailService: EmailService,
     private readonly prisma: PrismaService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {
     super();
   }
@@ -62,12 +65,15 @@ export class SaleEmailWorker extends WorkerHost {
 
     try {
       const sale = await this.saleService.findOne(saleId, organizationId);
-      const productNames = await this.loadProductNames(
-        organizationId,
-        (sale.details ?? []).map((d) => d.productId),
-      );
+      const [productNames, branding] = await Promise.all([
+        this.loadProductNames(
+          organizationId,
+          (sale.details ?? []).map((d) => d.productId),
+        ),
+        this.loadBranding(organizationId),
+      ]);
 
-      const html = renderSaleEmailHtml({
+      const content = renderSaleEmailHtml({
         reference: sale.reference,
         date: sale.date,
         paymentStatus: sale.paymentStatus,
@@ -85,7 +91,7 @@ export class SaleEmailWorker extends WorkerHost {
       await this.emailService.sendSaleSummary(organizationId, {
         to,
         subject: `Récapitulatif de vente ${sale.reference}`,
-        html,
+        html: wrapBrandedEmail(content, branding),
       });
 
       this.logger.log(`Récapitulatif de vente ${saleId} envoyé par email à ${to}`);
@@ -99,9 +105,12 @@ export class SaleEmailWorker extends WorkerHost {
         );
         return;
       }
+      this.logger.error(`sale.sendEmail : échec pour la vente ${saleId}`, err);
+      this.realtimeGateway.server
+        ?.to(`org:${organizationId}`)
+        .emit('email:sendFailed', { jobName: job.name, reference: saleId });
       // Erreur inattendue (ex. échec SMTP transitoire) : on relance pour que BullMQ retente
       // (defaultJobOptions.attempts = 3, backoff exponentiel — cf. MessagingQueueModule).
-      this.logger.error(`sale.sendEmail : échec pour la vente ${saleId}`, err);
       throw err;
     }
   }
@@ -121,5 +130,19 @@ export class SaleEmailWorker extends WorkerHost {
       select: { id: true, name: true },
     });
     return new Map(products.map((p) => [p.id, p.name]));
+  }
+
+  /**
+   * Charge le logo/couleur de l'organisation pour l'habillage brandé (S32) — lecture
+   * ponctuelle via PrismaService, mirror de loadProductNames ci-dessus.
+   */
+  private async loadBranding(
+    organizationId: string,
+  ): Promise<{ logoUrl: string | null; primaryColor: string | null }> {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { logoUrl: true, primaryColor: true },
+    });
+    return { logoUrl: org?.logoUrl ?? null, primaryColor: org?.primaryColor ?? null };
   }
 }

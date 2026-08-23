@@ -5,6 +5,8 @@ import { QuotationService } from '../modules/quotations/quotation.service';
 import { EmailService } from '../modules/messaging/email.service';
 import { PrismaService } from '../common/prisma.service';
 import { renderQuotationEmailHtml } from '../modules/messaging/quotation-message.renderer';
+import { wrapBrandedEmail } from '../modules/messaging/branded-email.template';
+import { RealtimeGateway } from '../modules/realtime/realtime.gateway';
 
 /**
  * Contrat du job de la file `email` (S28 — récapitulatif de devis par email).
@@ -46,6 +48,7 @@ export class QuotationEmailWorker extends WorkerHost {
     private readonly quotationService: QuotationService,
     private readonly emailService: EmailService,
     private readonly prisma: PrismaService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {
     super();
   }
@@ -64,12 +67,15 @@ export class QuotationEmailWorker extends WorkerHost {
 
     try {
       const quotation = await this.quotationService.findOne(quotationId, organizationId);
-      const productNames = await this.loadProductNames(
-        organizationId,
-        (quotation.details ?? []).map((d) => d.productId),
-      );
+      const [productNames, branding] = await Promise.all([
+        this.loadProductNames(
+          organizationId,
+          (quotation.details ?? []).map((d) => d.productId),
+        ),
+        this.loadBranding(organizationId),
+      ]);
 
-      const html = renderQuotationEmailHtml({
+      const content = renderQuotationEmailHtml({
         reference: quotation.reference,
         date: quotation.date,
         status: quotation.status,
@@ -87,7 +93,7 @@ export class QuotationEmailWorker extends WorkerHost {
       await this.emailService.sendQuotationSummary(organizationId, {
         to,
         subject: `Récapitulatif de devis ${quotation.reference}`,
-        html,
+        html: wrapBrandedEmail(content, branding),
       });
 
       this.logger.log(`Récapitulatif de devis ${quotationId} envoyé par email à ${to}`);
@@ -101,9 +107,12 @@ export class QuotationEmailWorker extends WorkerHost {
         );
         return;
       }
+      this.logger.error(`quotation.sendEmail : échec pour le devis ${quotationId}`, err);
+      this.realtimeGateway.server
+        ?.to(`org:${organizationId}`)
+        .emit('email:sendFailed', { jobName: job.name, reference: quotationId });
       // Erreur inattendue (ex. échec SMTP transitoire) : on relance pour que BullMQ retente
       // (defaultJobOptions.attempts = 3, backoff exponentiel — cf. MessagingQueueModule).
-      this.logger.error(`quotation.sendEmail : échec pour le devis ${quotationId}`, err);
       throw err;
     }
   }
@@ -123,5 +132,19 @@ export class QuotationEmailWorker extends WorkerHost {
       select: { id: true, name: true },
     });
     return new Map(products.map((p) => [p.id, p.name]));
+  }
+
+  /**
+   * Charge le logo/couleur de l'organisation pour l'habillage brandé (S32) — lecture
+   * ponctuelle via PrismaService, mirror de loadProductNames ci-dessus.
+   */
+  private async loadBranding(
+    organizationId: string,
+  ): Promise<{ logoUrl: string | null; primaryColor: string | null }> {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { logoUrl: true, primaryColor: true },
+    });
+    return { logoUrl: org?.logoUrl ?? null, primaryColor: org?.primaryColor ?? null };
   }
 }

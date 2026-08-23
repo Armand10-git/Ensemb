@@ -33,7 +33,7 @@ const FAKE_QUOTATION = {
 describe('QuotationEmailWorker', () => {
   let quotationService: { findOne: jest.Mock };
   let emailService: { sendQuotationSummary: jest.Mock };
-  let prisma: { product: { findMany: jest.Mock } };
+  let prisma: { product: { findMany: jest.Mock }; organization: { findUnique: jest.Mock } };
   let worker: QuotationEmailWorker;
 
   beforeEach(() => {
@@ -41,11 +41,13 @@ describe('QuotationEmailWorker', () => {
     emailService = { sendQuotationSummary: jest.fn().mockResolvedValue(undefined) };
     prisma = {
       product: { findMany: jest.fn().mockResolvedValue([{ id: 'prod-1', name: 'Produit test' }]) },
+      organization: { findUnique: jest.fn().mockResolvedValue({ logoUrl: null, primaryColor: null }) },
     };
     worker = new QuotationEmailWorker(
       quotationService as never,
       emailService as never,
       prisma as never,
+      {} as never,
     );
   });
 
@@ -66,6 +68,30 @@ describe('QuotationEmailWorker', () => {
     );
     const html = emailService.sendQuotationSummary.mock.calls[0][1].html as string;
     expect(html).toContain('Produit test');
+    // Habillage brandé (S32) — repli sur la couleur par défaut, logoUrl/primaryColor absents ici.
+    expect(html).toContain('#2FA75E');
+  });
+
+  it('erreur inattendue → notifie l\'échec via Socket.io sur la room de l\'organisation avant relance', async () => {
+    quotationService.findOne.mockRejectedValue(new Error('DB down'));
+    const emit = jest.fn();
+    const rtWorker = new QuotationEmailWorker(
+      quotationService as never,
+      emailService as never,
+      prisma as never,
+      { server: { to: jest.fn().mockReturnValue({ emit }) } } as never,
+    );
+
+    await expect(
+      rtWorker.process(
+        makeJob({ organizationId: ORG_ID, quotationId: QUOTATION_ID, to: 'client@example.com' }),
+      ),
+    ).rejects.toThrow('DB down');
+
+    expect(emit).toHaveBeenCalledWith(
+      'email:sendFailed',
+      expect.objectContaining({ jobName: 'quotation.sendEmail', reference: QUOTATION_ID }),
+    );
   });
 
   it('devis introuvable (NotFoundException) → no-op, pas de relance', async () => {

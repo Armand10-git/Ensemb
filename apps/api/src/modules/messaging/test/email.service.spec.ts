@@ -219,4 +219,83 @@ describe('EmailService', () => {
       ).rejects.toThrow(BadRequestException);
     });
   });
+
+  describe('sendPurchaseSummary / sendPaymentReceipt / sendReturnSummary (S32)', () => {
+    it("mode test (NODE_ENV=test) : n'effectue aucun appel réseau pour les trois méthodes", async () => {
+      const smtpServerService = { findForOrg: jest.fn(), getDecryptedPassword: jest.fn() };
+      const service = new EmailService(makeConfig('test') as never, smtpServerService as never);
+
+      await service.sendPurchaseSummary('org-1', {
+        to: 'fournisseur@example.com',
+        subject: 'Achat ACH-001',
+        html: '<p>ok</p>',
+      });
+      await service.sendPaymentReceipt('org-1', {
+        to: 'client@example.com',
+        subject: 'Reçu PAY-001',
+        html: '<p>ok</p>',
+      });
+      await service.sendReturnSummary('org-1', {
+        to: 'client@example.com',
+        subject: 'Retour RVT-001',
+        html: '<p>ok</p>',
+      });
+
+      expect(nodemailer.createTransport).not.toHaveBeenCalled();
+      expect(smtpServerService.findForOrg).not.toHaveBeenCalled();
+    });
+
+    it("hors mode test, envoie via sendMail avec le sujet et le destinataire fournis (sendPurchaseSummary)", async () => {
+      const sendMail = jest.fn().mockResolvedValue(undefined);
+      (nodemailer.createTransport as jest.Mock).mockReturnValue({ sendMail });
+
+      const smtpServerService = {
+        findForOrg: jest.fn().mockResolvedValue({
+          host: 'smtp.example.com',
+          port: 587,
+          username: 'user@example.com',
+          fromEmail: 'noreply@example.com',
+          fromName: 'Ensemb',
+        }),
+        getDecryptedPassword: jest.fn().mockResolvedValue('mot-de-passe-secret'),
+      };
+      const service = new EmailService(
+        makeConfig('production') as never,
+        smtpServerService as never,
+      );
+
+      await service.sendPurchaseSummary('org-1', {
+        to: 'fournisseur@example.com',
+        subject: 'Achat ACH-001',
+        html: '<p>ok</p>',
+      });
+
+      expect(sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'fournisseur@example.com',
+          subject: 'Achat ACH-001',
+          html: '<p>ok</p>',
+        }),
+      );
+    });
+
+    it("hors mode test, lève une BadRequestException si aucune configuration SMTP n'existe (sendPaymentReceipt)", async () => {
+      const smtpServerService = {
+        findForOrg: jest.fn().mockResolvedValue(null),
+        getDecryptedPassword: jest.fn(),
+      };
+      const service = new EmailService(
+        makeConfig('production') as never,
+        smtpServerService as never,
+      );
+
+      await expect(
+        service.sendPaymentReceipt('org-1', {
+          to: 'client@example.com',
+          subject: 'Reçu PAY-001',
+          html: '<p>ok</p>',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 });

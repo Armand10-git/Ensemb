@@ -51,6 +51,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/purchase-returns/:id         → détail avec lignes, achat d'origine, entrepôt
  *   PATCH  /api/v1/purchase-returns/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/purchase-returns/:id/validate → 200 (PENDING → COMPLETED, décrémente le stock)
+ *   POST   /api/v1/purchase-returns/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
  *   DELETE /api/v1/purchase-returns/:id         → 204 (PENDING uniquement)
  *
  * Pas de route /cancel dans cette session — mirror de purchases.cancel (S25, écart assumé).
@@ -169,6 +170,26 @@ export class PurchaseReturnController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.purchaseReturnService.validate(id, req.user.organizationId);
+  }
+
+  /**
+   * POST /api/v1/purchase-returns/:id/send
+   * Envoie le récapitulatif d'un retour fournisseur au fournisseur par email (S32, mirror
+   * exact de POST /api/v1/sale-returns/:id/send) — enfile un job BullMQ traité de façon
+   * asynchrone par un worker dédié (202 Accepted). Un seul canal (email) cette session — pas
+   * de body attendu.
+   *
+   * Réutilise la permission `purchaseReturns.view` plutôt qu'une nouvelle permission dédiée.
+   */
+  @RequirePermission('purchaseReturns.view')
+  @Post(':id/send')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'purchaseReturns.send', entity: 'PurchaseReturn' })
+  send(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.purchaseReturnService.send(id, req.user.organizationId);
   }
 
   /**

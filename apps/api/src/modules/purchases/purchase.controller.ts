@@ -51,6 +51,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/purchases/:id         → détail avec lignes, fournisseur, entrepôt
  *   PATCH  /api/v1/purchases/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/purchases/:id/validate → 200 (PENDING → COMPLETED, incrémente le stock)
+ *   POST   /api/v1/purchases/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
  *   DELETE /api/v1/purchases/:id         → 204 (PENDING uniquement)
  *
  * Pas de route /cancel dans cette session — purchases.cancel existe en permission mais
@@ -168,6 +169,28 @@ export class PurchaseController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.purchaseService.validate(id, req.user.organizationId);
+  }
+
+  /**
+   * POST /api/v1/purchases/:id/send
+   * Envoie le récapitulatif d'un achat au fournisseur par email (S32, mirror exact de
+   * POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
+   * un worker dédié (202 Accepted, pas d'attente de l'envoi réel). Un seul canal (email) cette
+   * session — pas de body attendu.
+   *
+   * Réutilise la permission `purchases.view` plutôt qu'une nouvelle permission dédiée — même
+   * décision que SaleController.send (S24) : envoyer le récapitulatif est une action de
+   * partage sur une ressource déjà consultable, pas une mutation de l'achat lui-même.
+   */
+  @RequirePermission('purchases.view')
+  @Post(':id/send')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'purchases.send', entity: 'Purchase' })
+  send(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.purchaseService.send(id, req.user.organizationId);
   }
 
   /**

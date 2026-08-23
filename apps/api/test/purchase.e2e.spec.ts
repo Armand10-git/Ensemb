@@ -24,8 +24,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
@@ -64,6 +65,7 @@ let pwValId: string;       // ProductWarehouse dédié aux tests de validate() (
 
 const PERMS = [
   'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete', 'purchases.validate',
+  'paymentPurchases.view', 'paymentPurchases.create',
   'records.viewAll',
 ];
 const PERMS_NO_VIEWALL = ['purchases.view', 'purchases.create', 'purchases.edit', 'purchases.delete'];
@@ -166,6 +168,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,
@@ -200,6 +208,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
   // Nettoyage dans l'ordre des FK
+  await prisma.paymentPurchase.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.purchaseDetail.deleteMany({ where: { purchase: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.purchase.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.provider.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
@@ -706,4 +715,142 @@ describe('PATCH /api/v1/purchases/:id/validate', () => {
       expect(reload2!.status).toBe('COMPLETED');
     },
   );
+});
+
+// ─── POST /purchases/:id/send (S32) ────────────────────────────────────────────
+// Envoie le récapitulatif d'un achat au fournisseur par email — enfile un job BullMQ
+// fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Fournisseur dédié
+// à ce describe (email renseigné), distinct de providerAId (sans contact renseigné, réutilisé
+// tel quel par les tests précédents) pour ne risquer aucune régression sur les describe blocks
+// en amont.
+
+describe('POST /api/v1/purchases/:id/send', () => {
+  let providerContactId: string;
+
+  beforeAll(async () => {
+    const provider = await prisma.provider.create({
+      data: {
+        organizationId: orgAId,
+        name: `Fournisseur Purchase Contact ${SUFFIX}`,
+        code: 2,
+        email: `provider-send-${SUFFIX}@e2e.cm`,
+      },
+    });
+    providerContactId = provider.id;
+  });
+
+  async function createPurchase(providerId: string): Promise<string> {
+    const created = await asA('post', '/api/v1/purchases').send({
+      providerId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+    const purchaseId = await createPurchase(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — fournisseur sans adresse email enregistrée", async () => {
+    // providerAId (créé dans le beforeAll global) n'a pas d'email renseigné.
+    const purchaseId = await createPurchase(providerAId);
+
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/send`).send();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
+  });
+
+  it('404 — achat inexistant', async () => {
+    const res = await asA('post', '/api/v1/purchases/00000000-0000-0000-0000-000000000000/send').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer un achat de org A', async () => {
+    const purchaseId = await createPurchase(providerContactId);
+
+    const res = await asB('post', `/api/v1/purchases/${purchaseId}/send`).send();
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// ─── POST /purchases/payments/:id/send (S32) ───────────────────────────────────
+// Envoie le reçu d'un paiement d'achat au fournisseur par email — mirror exact du describe
+// précédent, sur le paiement plutôt que sur l'achat.
+
+describe('POST /api/v1/purchases/payments/:id/send', () => {
+  let providerContactId: string;
+
+  beforeAll(async () => {
+    const provider = await prisma.provider.create({
+      data: {
+        organizationId: orgAId,
+        name: `Fournisseur Payment Contact ${SUFFIX}`,
+        code: 3,
+        email: `provider-payment-send-${SUFFIX}@e2e.cm`,
+      },
+    });
+    providerContactId = provider.id;
+  });
+
+  async function createPurchaseWithPayment(providerId: string): Promise<string> {
+    const purchase = await asA('post', '/api/v1/purchases').send({
+      providerId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    const purchaseId = purchase.body.id as string;
+
+    const payment = await asA('post', `/api/v1/purchases/${purchaseId}/payments`).send({
+      date: '2026-07-26T00:00:00.000Z',
+      amount: '500',
+      method: 'CASH',
+    });
+    return payment.body.id as string;
+  }
+
+  it('202 — fournisseur avec email renseigné → job enfilé', async () => {
+    const paymentId = await createPurchaseWithPayment(providerContactId);
+
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — fournisseur sans adresse email enregistrée", async () => {
+    const paymentId = await createPurchaseWithPayment(providerAId);
+
+    const res = await asA('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce fournisseur n'a pas d'adresse email enregistrée.");
+  });
+
+  it('404 — paiement inexistant', async () => {
+    const res = await asA(
+      'post',
+      '/api/v1/purchases/payments/00000000-0000-0000-0000-000000000000/send',
+    ).send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer un paiement de org A', async () => {
+    const paymentId = await createPurchaseWithPayment(providerContactId);
+
+    const res = await asB('post', `/api/v1/purchases/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(403);
+  });
 });

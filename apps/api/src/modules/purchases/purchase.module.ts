@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../common/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { MessagingQueueModule } from '../messaging/messaging-queue.module';
 import { PurchaseService } from './purchase.service';
 import { PurchaseController } from './purchase.controller';
 import { PaymentPurchaseService } from './payment-purchase.service';
@@ -17,9 +18,11 @@ import { PaymentPurchaseController } from './payment-purchase.controller';
  * RealtimeModule est importé pour que PurchaseService puisse émettre
  * purchase:created/stock:updated. InventoryModule est importé pour que PurchaseService
  * puisse injecter ProductWarehouseService (adjustStock, verrouillage optimiste).
+ * MessagingQueueModule (S32) pour injecter la file BullMQ 'email' (envoi du récapitulatif
+ * d'achat et du reçu de paiement fournisseur).
  */
 @Module({
-  imports: [PrismaModule, RealtimeModule, InventoryModule],
+  imports: [PrismaModule, RealtimeModule, InventoryModule, MessagingQueueModule],
   controllers: [PurchaseController, PaymentPurchaseController],
   providers: [PurchaseService, PaymentPurchaseService],
   exports: [PurchaseService, PaymentPurchaseService],

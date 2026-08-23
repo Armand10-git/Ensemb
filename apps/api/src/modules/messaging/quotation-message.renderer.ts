@@ -1,4 +1,5 @@
 import type { Decimal } from '@prisma/client/runtime/library';
+import { escapeHtml, formatAmount, formatDate } from './message-format.util';
 
 /**
  * Ligne d'un devis pour le rendu email/SMS (S28).
@@ -50,42 +51,6 @@ const QUOTATION_STATUS_LABELS: Record<string, string> = {
  */
 function quotationStatusLabel(status: string): string {
   return QUOTATION_STATUS_LABELS[status] ?? status;
-}
-
-/**
- * Formate un montant Decimal en XAF pour affichage humain (aucune décimale — le franc CFA
- * ne s'utilise pas en sous-unité dans l'usage courant). Purement pour le rendu ; les calculs
- * monétaires eux-mêmes restent en Decimal côté serveur (§17 point 1) — cette fonction ne fait
- * que formater un résultat déjà calculé.
- *
- * Dupliquée depuis sale-message.renderer.ts plutôt qu'importée : ce dernier n'exporte pas ses
- * helpers privés, et ce module doit rester indépendant (frontière de module déjà établie dans
- * ce projet — cf. commentaire équivalent dans les workers).
- */
-function formatAmount(amount: Decimal): string {
-  return `${amount.toNumber().toLocaleString('fr-FR')} XAF`;
-}
-
-/**
- * Échappe les caractères HTML spéciaux d'une chaîne insérée dans le template email —
- * empêche toute injection HTML via un nom de client ou une note contenant des balises
- * (§17 point « XSS » — même hygiène appliquée ici bien qu'il s'agisse d'un email, pas
- * d'une page web rendue dans un navigateur contrôlé par nous).
- */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Formate une date pour affichage humain en français (jour/mois/année).
- */
-function formatDate(date: Date): string {
-  return date.toLocaleDateString('fr-FR');
 }
 
 /**

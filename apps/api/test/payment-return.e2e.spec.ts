@@ -19,8 +19,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { randomUUID } from 'crypto';
@@ -140,6 +141,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,

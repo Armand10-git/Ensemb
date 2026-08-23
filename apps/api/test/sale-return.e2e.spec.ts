@@ -21,8 +21,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
@@ -141,6 +142,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,
@@ -720,5 +727,72 @@ describe('DELETE /api/v1/sale-returns/:id', () => {
 
     const res = await asA('delete', `/api/v1/sale-returns/${returnId}`);
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── POST /sale-returns/:id/send (S32) ─────────────────────────────────────────
+// Envoie le récapitulatif d'un retour de vente au client par email — enfile un job BullMQ
+// fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Client dédié à ce
+// describe (email renseigné) affecté à la vente d'origine après création — clientAId (utilisé
+// par createCompletedSaleWithDetail) n'a pas d'email renseigné, réutilisé tel quel pour le
+// test 400.
+
+describe('POST /api/v1/sale-returns/:id/send', () => {
+  let clientContactId: string;
+
+  beforeAll(async () => {
+    const client = await prisma.client.create({
+      data: {
+        organizationId: orgAId,
+        name: `Client SaleReturn Contact ${SUFFIX}`,
+        code: 2,
+        email: `client-return-send-${SUFFIX}@e2e.cm`,
+      },
+    });
+    clientContactId = client.id;
+  });
+
+  async function createSaleReturn(clientId: string): Promise<string> {
+    const { saleId, saleDetailId } = await createCompletedSaleWithDetail(orgAId, adminAId, '2');
+    await prisma.sale.update({ where: { id: saleId }, data: { clientId } });
+
+    const created = await asA('post', '/api/v1/sale-returns').send({
+      saleId,
+      date: '2026-07-27T00:00:00.000Z',
+      details: [{ saleDetailId, quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — client avec email renseigné → job enfilé', async () => {
+    const returnId = await createSaleReturn(clientContactId);
+
+    const res = await asA('post', `/api/v1/sale-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — client sans adresse email enregistrée", async () => {
+    const returnId = await createSaleReturn(clientAId);
+
+    const res = await asA('post', `/api/v1/sale-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce client n'a pas d'adresse email enregistrée.");
+  });
+
+  it('404 — retour inexistant', async () => {
+    const res = await asA('post', '/api/v1/sale-returns/00000000-0000-0000-0000-000000000000/send').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer un retour de org A', async () => {
+    const returnId = await createSaleReturn(clientContactId);
+
+    const res = await asB('post', `/api/v1/sale-returns/${returnId}/send`).send();
+
+    expect(res.status).toBe(403);
   });
 });

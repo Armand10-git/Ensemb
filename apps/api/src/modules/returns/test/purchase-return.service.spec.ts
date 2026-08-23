@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PurchaseReturnService } from '../purchase-return.service';
 import { PrismaService } from '../../../common/prisma.service';
@@ -74,6 +75,7 @@ describe('PurchaseReturnService', () => {
   let documentCounter: { nextReference: jest.Mock };
   let productWarehouseService: { adjustStock: jest.Mock };
   let notificationService: { createForOrg: jest.Mock };
+  let emailQueue: { add: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -106,6 +108,7 @@ describe('PurchaseReturnService', () => {
     const rtMock = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const pwMock = { adjustStock: jest.fn() };
     const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
+    const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -115,6 +118,7 @@ describe('PurchaseReturnService', () => {
         { provide: RealtimeGateway, useValue: rtMock },
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: NotificationService, useValue: notifMock },
+        { provide: getQueueToken('email'), useValue: emailQueueMock },
       ],
     }).compile();
 
@@ -123,6 +127,7 @@ describe('PurchaseReturnService', () => {
     documentCounter = dcMock;
     productWarehouseService = pwMock;
     notificationService = notifMock;
+    emailQueue = emailQueueMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -526,5 +531,53 @@ describe('PurchaseReturnService', () => {
     expect(prisma.purchaseReturn.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: PURCHASE_RETURN_ID }, data: expect.objectContaining({ deletedAt: expect.any(Date) }) }),
     );
+  });
+
+  // ─── send ────────────────────────────────────────────────────────────────
+
+  it('send : enfile un job purchaseReturn.sendEmail sur la file email quand le fournisseur a un email', async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      purchase: { provider: { email: 'fournisseur@example.com' } },
+    });
+
+    const result = await service.send(PURCHASE_RETURN_ID, ORG_A);
+
+    expect(result).toEqual({ status: 'queued' });
+    expect(emailQueue.add).toHaveBeenCalledWith('purchaseReturn.sendEmail', {
+      organizationId: ORG_A,
+      returnId: PURCHASE_RETURN_ID,
+      to: 'fournisseur@example.com',
+    });
+  });
+
+  it("send : lève BadRequestException si le fournisseur n'a pas d'adresse email", async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      purchase: { provider: { email: null } },
+    });
+
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(BadRequestException);
+    expect(emailQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('send : lève NotFoundException si le retour est introuvable ou soft-supprimé', async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue(null);
+
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(NotFoundException);
+    expect(emailQueue.add).not.toHaveBeenCalled();
+  });
+
+  it("send : lève ForbiddenException si le retour appartient à une autre organisation (anti-IDOR)", async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_B,
+      deletedAt: null,
+      purchase: { provider: { email: 'fournisseur@example.com' } },
+    });
+
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+    expect(emailQueue.add).not.toHaveBeenCalled();
   });
 });
