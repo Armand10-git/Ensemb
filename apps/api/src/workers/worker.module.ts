@@ -26,8 +26,11 @@ import { SaleSmsWorker } from './sale-sms.worker';
 import { QuotationEmailWorker } from './quotation-email.worker';
 import { QuotationSmsWorker } from './quotation-sms.worker';
 import { PurchaseEmailWorker } from './purchase-email.worker';
+import { PurchaseSmsWorker } from './purchase-sms.worker';
 import { PaymentReceiptEmailWorker } from './payment-receipt-email.worker';
+import { PaymentReceiptSmsWorker } from './payment-receipt-sms.worker';
 import { ReturnEmailWorker } from './return-email.worker';
+import { ReturnSmsWorker } from './return-sms.worker';
 
 /**
  * Module chargé uniquement dans le process worker dédié (apps/api/src/worker.ts).
@@ -100,8 +103,11 @@ import { ReturnEmailWorker } from './return-email.worker';
     QuotationEmailWorker,
     QuotationSmsWorker,
     PurchaseEmailWorker,
+    PurchaseSmsWorker,
     PaymentReceiptEmailWorker,
+    PaymentReceiptSmsWorker,
     ReturnEmailWorker,
+    ReturnSmsWorker,
   ],
 })
 export class WorkerModule {}

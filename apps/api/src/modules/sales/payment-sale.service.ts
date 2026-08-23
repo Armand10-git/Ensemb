@@ -76,6 +76,8 @@ export class PaymentSaleService {
     private readonly documentCounter: DocumentCounterService,
     @InjectQueue('email')
     private readonly emailQueue: Queue<{ organizationId: string; paymentId: string; to: string }>,
+    @InjectQueue('sms')
+    private readonly smsQueue: Queue<{ organizationId: string; paymentId: string; to: string }>,
   ) {}
 
   /**
@@ -246,24 +248,29 @@ export class PaymentSaleService {
   }
 
   /**
-   * Envoie le reçu d'un paiement de vente au client par email (S32, mirror exact de
-   * SaleService.send — un seul canal email, pas de body attendu). Enfile un job BullMQ
-   * ('paymentSale.sendEmail', file 'email') consommé par payment-receipt-email.worker.ts —
-   * aucun appel réseau synchrone, retourne dès que le job est enfilé.
+   * Envoie le reçu d'un paiement de vente au client par email ou SMS (S32/S33, mirror exact de
+   * SaleService.send). Enfile un job BullMQ ('paymentSale.sendEmail'/'paymentSale.sendSms',
+   * file 'email'/'sms') consommé par le worker dédié — aucun appel réseau synchrone, retourne
+   * dès que le job est enfilé.
    *
    * @param id - identifiant du paiement à envoyer.
    * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param channel - canal d'envoi : 'email' (nécessite client.email) ou 'sms' (nécessite client.phone).
    * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
    * @throws NotFoundException si le paiement est introuvable.
    * @throws ForbiddenException si le paiement n'appartient pas à l'organisation.
-   * @throws BadRequestException si le client n'a pas d'adresse email enregistrée.
+   * @throws BadRequestException si le client n'a pas de contact enregistré pour le canal demandé.
    */
-  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+  async send(
+    id: string,
+    organizationId: string,
+    channel: 'email' | 'sms',
+  ): Promise<{ status: 'queued' }> {
     const payment = await this.prisma.paymentSale.findUnique({
       where: { id },
       select: {
         organizationId: true,
-        sale: { select: { client: { select: { email: true } } } },
+        sale: { select: { client: { select: { email: true, phone: true } } } },
       },
     });
 
@@ -274,12 +281,20 @@ export class PaymentSaleService {
       throw new ForbiddenException('Accès refusé.');
     }
 
-    const to = payment.sale.client.email;
-    if (!to) {
-      throw new BadRequestException("Ce client n'a pas d'adresse email enregistrée.");
+    if (channel === 'email') {
+      const to = payment.sale.client.email;
+      if (!to) {
+        throw new BadRequestException("Ce client n'a pas d'adresse email enregistrée.");
+      }
+      await this.emailQueue.add('paymentSale.sendEmail', { organizationId, paymentId: id, to });
+      return { status: 'queued' };
     }
 
-    await this.emailQueue.add('paymentSale.sendEmail', { organizationId, paymentId: id, to });
+    const to = payment.sale.client.phone;
+    if (!to) {
+      throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
+    }
+    await this.smsQueue.add('paymentSale.sendSms', { organizationId, paymentId: id, to });
     return { status: 'queued' };
   }
 

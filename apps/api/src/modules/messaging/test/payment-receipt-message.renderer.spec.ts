@@ -1,5 +1,5 @@
 import { Decimal } from '@prisma/client/runtime/library';
-import { renderPaymentReceiptEmailHtml } from '../payment-receipt-message.renderer';
+import { renderPaymentReceiptEmailHtml, renderPaymentReceiptSmsBody } from '../payment-receipt-message.renderer';
 import type { PaymentReceiptMessageInput } from '../payment-receipt-message.renderer';
 
 const baseSaleReceipt: PaymentReceiptMessageInput = {
@@ -68,5 +68,38 @@ describe('renderPaymentReceiptEmailHtml', () => {
 
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+});
+
+describe('renderPaymentReceiptSmsBody', () => {
+  it('rend un reçu de paiement de vente avec le libellé "vente"', () => {
+    const body = renderPaymentReceiptSmsBody(baseSaleReceipt);
+
+    expect(body).toContain('PAY-2026-0001');
+    expect(body).toContain('V-2026-0001');
+    expect(body).toContain('(vente)');
+    expect(body).toMatch(/5.?000 XAF/);
+  });
+
+  it('rend un reçu de paiement d\'achat avec le libellé "achat"', () => {
+    const purchaseReceipt: PaymentReceiptMessageInput = {
+      ...baseSaleReceipt,
+      kind: 'purchase',
+      reference: 'PAA-2026-0001',
+      documentReference: 'ACH-2026-0001',
+      counterpartyName: 'Fournisseur Test',
+    };
+
+    const body = renderPaymentReceiptSmsBody(purchaseReceipt);
+
+    expect(body).toContain('PAA-2026-0001');
+    expect(body).toContain('ACH-2026-0001');
+    expect(body).toContain('(achat)');
+  });
+
+  it('reste un texte court sans balise HTML', () => {
+    const body = renderPaymentReceiptSmsBody(baseSaleReceipt);
+
+    expect(body).not.toMatch(/<[^>]+>/);
   });
 });

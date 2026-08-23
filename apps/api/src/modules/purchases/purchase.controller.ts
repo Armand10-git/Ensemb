@@ -25,6 +25,7 @@ import { ViewAllInterceptor, type ViewAllRequest } from '../../common/intercepto
 import { PurchaseService } from './purchase.service';
 import { CreatePurchaseSchema } from './dto/create-purchase.dto';
 import { UpdatePurchaseSchema } from './dto/update-purchase.dto';
+import { SendPurchaseSchema } from './dto/send-purchase.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 const UUID_RE =
@@ -173,10 +174,10 @@ export class PurchaseController {
 
   /**
    * POST /api/v1/purchases/:id/send
-   * Envoie le récapitulatif d'un achat au fournisseur par email (S32, mirror exact de
-   * POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
-   * un worker dédié (202 Accepted, pas d'attente de l'envoi réel). Un seul canal (email) cette
-   * session — pas de body attendu.
+   * Envoie le récapitulatif d'un achat au fournisseur par email ou SMS (S32/S33, mirror exact
+   * de POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
+   * un worker dédié (202 Accepted, pas d'attente de l'envoi réel). channel: 'email' | 'sms'
+   * dans le body.
    *
    * Réutilise la permission `purchases.view` plutôt qu'une nouvelle permission dédiée — même
    * décision que SaleController.send (S24) : envoyer le récapitulatif est une action de
@@ -189,8 +190,13 @@ export class PurchaseController {
   send(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
   ) {
-    return this.purchaseService.send(id, req.user.organizationId);
+    const result = SendPurchaseSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.purchaseService.send(id, req.user.organizationId, result.data.channel);
   }
 
   /**

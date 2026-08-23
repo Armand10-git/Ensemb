@@ -25,6 +25,7 @@ import { ViewAllInterceptor, type ViewAllRequest } from '../../common/intercepto
 import { PurchaseReturnService } from './purchase-return.service';
 import { CreatePurchaseReturnSchema } from './dto/create-purchase-return.dto';
 import { UpdatePurchaseReturnSchema } from './dto/update-purchase-return.dto';
+import { SendReturnSchema } from './dto/send-return.dto';
 import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
 
 const UUID_RE =
@@ -51,7 +52,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/purchase-returns/:id         → détail avec lignes, achat d'origine, entrepôt
  *   PATCH  /api/v1/purchase-returns/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/purchase-returns/:id/validate → 200 (PENDING → COMPLETED, décrémente le stock)
- *   POST   /api/v1/purchase-returns/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
+ *   POST   /api/v1/purchase-returns/:id/send    → 202 (S32/S33 — envoi asynchrone du récapitulatif par email/SMS)
  *   DELETE /api/v1/purchase-returns/:id         → 204 (PENDING uniquement)
  *
  * Pas de route /cancel dans cette session — mirror de purchases.cancel (S25, écart assumé).
@@ -174,10 +175,9 @@ export class PurchaseReturnController {
 
   /**
    * POST /api/v1/purchase-returns/:id/send
-   * Envoie le récapitulatif d'un retour fournisseur au fournisseur par email (S32, mirror
-   * exact de POST /api/v1/sale-returns/:id/send) — enfile un job BullMQ traité de façon
-   * asynchrone par un worker dédié (202 Accepted). Un seul canal (email) cette session — pas
-   * de body attendu.
+   * Envoie le récapitulatif d'un retour fournisseur au fournisseur par email ou SMS (S32/S33,
+   * mirror exact de POST /api/v1/sale-returns/:id/send) — enfile un job BullMQ traité de façon
+   * asynchrone par un worker dédié (202 Accepted). Le canal est fourni dans le body (`{ channel }`).
    *
    * Réutilise la permission `purchaseReturns.view` plutôt qu'une nouvelle permission dédiée.
    */
@@ -188,8 +188,13 @@ export class PurchaseReturnController {
   send(
     @Req() req: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
   ) {
-    return this.purchaseReturnService.send(id, req.user.organizationId);
+    const result = SendReturnSchema.safeParse(body);
+    if (!result.success) {
+      throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
+    }
+    return this.purchaseReturnService.send(id, req.user.organizationId, result.data.channel);
   }
 
   /**

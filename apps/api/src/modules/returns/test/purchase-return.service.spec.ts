@@ -76,6 +76,7 @@ describe('PurchaseReturnService', () => {
   let productWarehouseService: { adjustStock: jest.Mock };
   let notificationService: { createForOrg: jest.Mock };
   let emailQueue: { add: jest.Mock };
+  let smsQueue: { add: jest.Mock };
   const toEmit = jest.fn();
 
   beforeEach(async () => {
@@ -109,6 +110,7 @@ describe('PurchaseReturnService', () => {
     const pwMock = { adjustStock: jest.fn() };
     const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -119,6 +121,7 @@ describe('PurchaseReturnService', () => {
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: NotificationService, useValue: notifMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
+        { provide: getQueueToken('sms'), useValue: smsQueueMock },
       ],
     }).compile();
 
@@ -128,6 +131,7 @@ describe('PurchaseReturnService', () => {
     productWarehouseService = pwMock;
     notificationService = notifMock;
     emailQueue = emailQueueMock;
+    smsQueue = smsQueueMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -542,7 +546,7 @@ describe('PurchaseReturnService', () => {
       purchase: { provider: { email: 'fournisseur@example.com' } },
     });
 
-    const result = await service.send(PURCHASE_RETURN_ID, ORG_A);
+    const result = await service.send(PURCHASE_RETURN_ID, ORG_A, 'email');
 
     expect(result).toEqual({ status: 'queued' });
     expect(emailQueue.add).toHaveBeenCalledWith('purchaseReturn.sendEmail', {
@@ -559,14 +563,42 @@ describe('PurchaseReturnService', () => {
       purchase: { provider: { email: null } },
     });
 
-    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(BadRequestException);
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(BadRequestException);
     expect(emailQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('send : enfile un job purchaseReturn.sendSms sur la file sms quand le fournisseur a un téléphone', async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      purchase: { provider: { phone: '+237600000000' } },
+    });
+
+    const result = await service.send(PURCHASE_RETURN_ID, ORG_A, 'sms');
+
+    expect(result).toEqual({ status: 'queued' });
+    expect(smsQueue.add).toHaveBeenCalledWith('purchaseReturn.sendSms', {
+      organizationId: ORG_A,
+      returnId: PURCHASE_RETURN_ID,
+      to: '+237600000000',
+    });
+  });
+
+  it("send : lève BadRequestException si le fournisseur n'a pas de numéro de téléphone", async () => {
+    prisma.purchaseReturn.findUnique.mockResolvedValue({
+      organizationId: ORG_A,
+      deletedAt: null,
+      purchase: { provider: { phone: null } },
+    });
+
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A, 'sms')).rejects.toThrow(BadRequestException);
+    expect(smsQueue.add).not.toHaveBeenCalled();
   });
 
   it('send : lève NotFoundException si le retour est introuvable ou soft-supprimé', async () => {
     prisma.purchaseReturn.findUnique.mockResolvedValue(null);
 
-    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(NotFoundException);
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 
@@ -577,7 +609,7 @@ describe('PurchaseReturnService', () => {
       purchase: { provider: { email: 'fournisseur@example.com' } },
     });
 
-    await expect(service.send(PURCHASE_RETURN_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+    await expect(service.send(PURCHASE_RETURN_ID, ORG_A, 'email')).rejects.toThrow(ForbiddenException);
     expect(emailQueue.add).not.toHaveBeenCalled();
   });
 });

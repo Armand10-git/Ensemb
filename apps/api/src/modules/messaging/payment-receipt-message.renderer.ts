@@ -76,3 +76,19 @@ export function renderPaymentReceiptEmailHtml(receipt: PaymentReceiptMessageInpu
       ${changeLine}
     </div>`;
 }
+
+/**
+ * Construit le corps texte court du reçu de paiement envoyé par SMS (S33) —
+ * mirror exact de renderSaleSmsBody (sale-message.renderer.ts).
+ *
+ * @param receipt - Sous-ensemble du paiement nécessaire au rendu (cf. PaymentReceiptMessageInput).
+ * @returns Un texte brut : référence, montant et document d'origine.
+ */
+export function renderPaymentReceiptSmsBody(receipt: PaymentReceiptMessageInput): string {
+  const documentLabel = receipt.kind === 'sale' ? 'vente' : 'achat';
+  return (
+    `Reçu ${receipt.reference} du ${formatDate(receipt.date)} — ` +
+    `Montant : ${formatAmount(receipt.amount)} — ` +
+    `Document d'origine (${documentLabel}) : ${receipt.documentReference}.`
+  );
+}

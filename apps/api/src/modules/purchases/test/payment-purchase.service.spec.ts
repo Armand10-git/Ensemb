@@ -66,6 +66,7 @@ describe('PaymentPurchaseService', () => {
 
   let documentCounter: { nextReference: jest.Mock };
   let emailQueue: { add: jest.Mock };
+  let smsQueue: { add: jest.Mock };
 
   beforeEach(async () => {
     const prismaMock = {
@@ -94,6 +95,7 @@ describe('PaymentPurchaseService', () => {
 
     const dcMock = { nextReference: jest.fn().mockResolvedValue(REF) };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -101,12 +103,14 @@ describe('PaymentPurchaseService', () => {
         { provide: PrismaService, useValue: prismaMock },
         { provide: DocumentCounterService, useValue: dcMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
+        { provide: getQueueToken('sms'), useValue: smsQueueMock },
       ],
     }).compile();
 
     service = module.get(PaymentPurchaseService);
     prisma = prismaMock;
     documentCounter = dcMock;
+    smsQueue = smsQueueMock;
     emailQueue = emailQueueMock;
   });
 
@@ -456,7 +460,7 @@ describe('PaymentPurchaseService', () => {
         purchase: { provider: { email: 'fournisseur@example.com' } },
       });
 
-      const result = await service.send(PAYMENT_ID, ORG_A);
+      const result = await service.send(PAYMENT_ID, ORG_A, 'email');
 
       expect(result).toEqual({ status: 'queued' });
       expect(emailQueue.add).toHaveBeenCalledWith('paymentPurchase.sendEmail', {
@@ -472,14 +476,40 @@ describe('PaymentPurchaseService', () => {
         purchase: { provider: { email: null } },
       });
 
-      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(BadRequestException);
+      await expect(service.send(PAYMENT_ID, ORG_A, 'email')).rejects.toThrow(BadRequestException);
       expect(emailQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('enfile un job paymentPurchase.sendSms sur la file sms quand le fournisseur a un téléphone', async () => {
+      prisma.paymentPurchase.findUnique.mockResolvedValueOnce({
+        organizationId: ORG_A,
+        purchase: { provider: { phone: '+237600000000' } },
+      });
+
+      const result = await service.send(PAYMENT_ID, ORG_A, 'sms');
+
+      expect(result).toEqual({ status: 'queued' });
+      expect(smsQueue.add).toHaveBeenCalledWith('paymentPurchase.sendSms', {
+        organizationId: ORG_A,
+        paymentId: PAYMENT_ID,
+        to: '+237600000000',
+      });
+    });
+
+    it("lève BadRequestException si le fournisseur n'a pas de numéro de téléphone", async () => {
+      prisma.paymentPurchase.findUnique.mockResolvedValueOnce({
+        organizationId: ORG_A,
+        purchase: { provider: { phone: null } },
+      });
+
+      await expect(service.send(PAYMENT_ID, ORG_A, 'sms')).rejects.toThrow(BadRequestException);
+      expect(smsQueue.add).not.toHaveBeenCalled();
     });
 
     it('lève NotFoundException si le paiement est introuvable', async () => {
       prisma.paymentPurchase.findUnique.mockResolvedValueOnce(null);
 
-      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(NotFoundException);
+      await expect(service.send(PAYMENT_ID, ORG_A, 'email')).rejects.toThrow(NotFoundException);
       expect(emailQueue.add).not.toHaveBeenCalled();
     });
 
@@ -489,7 +519,7 @@ describe('PaymentPurchaseService', () => {
         purchase: { provider: { email: 'fournisseur@example.com' } },
       });
 
-      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+      await expect(service.send(PAYMENT_ID, ORG_A, 'email')).rejects.toThrow(ForbiddenException);
       expect(emailQueue.add).not.toHaveBeenCalled();
     });
   });
