@@ -338,32 +338,85 @@ export class SaleService {
   }
 
   /**
-   * Annule une vente dont le stock a déjà été mouvementé — COMPLETED (S21b, §18.18) ou
-   * AWAITING_PAYMENT (S22, expiration mobile money, §18.2 étape 10 : le stock est déjà
-   * décrémenté à la création POS, avant même la confirmation du paiement) : restitue le
-   * stock — même regroupement/conversion d'unité que validate(), delta positif — puis
-   * fait passer le statut à CANCELLED avec raison/horodatage/acteur. Le tout dans une
-   * seule transaction Serializable, vente et lignes relues DANS la transaction (même
-   * patron anti-TOCTOU que validate()).
+   * Annule MANUELLEMENT une vente déjà validée — COMPLETED uniquement (S21b, §18.18,
+   * permission sales.cancel) : restitue le stock puis fait passer le statut à CANCELLED
+   * avec raison/horodatage/acteur. Le paiement déjà encaissé n'est PAS touché — un
+   * remboursement est un acte séparé (§18.18 point 4, hors périmètre de cette session).
    *
-   * Réutilisable en interne (pas seulement via HTTP) : appelée directement par le job
-   * d'expiration mobile money (S22) avec actorId: null (aucun contexte HTTP) — c'est la
-   * raison pour laquelle S21b et S22 partagent cette méthode plutôt que de dupliquer la
-   * logique de restitution entre une annulation manuelle et une expiration automatique.
-   * Le paiement déjà encaissé n'est PAS touché — un remboursement est un acte séparé
-   * (§18.18 point 4, hors périmètre de cette session).
+   * N'accepte QUE COMPLETED — une vente AWAITING_PAYMENT ne peut être « annulée » que par
+   * son expiration automatique (cf. expireAwaitingPayment), jamais par ce chemin manuel :
+   * les deux cas ont des garanties d'idempotence différentes (§17 point V ; voir JSDoc de
+   * expireAwaitingPayment pour le détail du bug de double restitution que cette séparation
+   * élimine, S31).
    *
-   * @param actorId - utilisateur à l'origine de l'annulation, ou null si système (expiration).
    * @throws NotFoundException si la vente est introuvable.
    * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
-   * @throws BadRequestException si la vente est PENDING ou déjà CANCELLED (stock jamais mouvementé
-   *         ou déjà restitué — pas de double restitution).
+   * @throws BadRequestException si la vente n'est pas COMPLETED.
    * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
    */
   async cancel(
     id: string,
     organizationId: string,
     { reason, actorId }: { reason: string; actorId: string | null },
+  ): Promise<SaleResponse> {
+    return this.cancelOrExpire(id, organizationId, {
+      reason,
+      actorId,
+      allowedStatus: 'COMPLETED',
+      guardMessage: 'Seule une vente validée (COMPLETED) peut être annulée.',
+    });
+  }
+
+  /**
+   * Expire une réservation de paiement asynchrone POS — AWAITING_PAYMENT uniquement (S22,
+   * §18.2 étape 10 : le stock est déjà décrémenté à la création POS, avant même la
+   * confirmation du paiement). Appelée UNIQUEMENT par le job d'expiration (§17 point V),
+   * jamais depuis un contrôleur HTTP — actorId toujours null (aucun contexte HTTP).
+   *
+   * N'accepte QUE AWAITING_PAYMENT, contrairement à l'ancienne version de cette logique
+   * (avant S31) qui acceptait aussi COMPLETED pour partager le code avec cancel() : si le
+   * webhook de confirmation gagne la course contre l'expiration (vente déjà COMPLETED au
+   * moment où le job tourne), cette méthode DOIT lever BadRequestException — sinon elle
+   * restituerait le stock une seconde fois et écraserait le statut d'une vente déjà payée
+   * en CANCELLED (bug corrigé en S31, détecté par un test de compétition confirmation/
+   * expiration sur CARD). Le worker absorbe cette exception en no-op idempotent.
+   *
+   * @throws NotFoundException si la vente est introuvable.
+   * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
+   * @throws BadRequestException si la vente n'est pas AWAITING_PAYMENT (déjà confirmée ou
+   *         déjà expirée — pas de double restitution).
+   * @throws ConflictException si un conflit de version optimiste ou de sérialisation (P2034).
+   */
+  async expireAwaitingPayment(
+    id: string,
+    organizationId: string,
+    reason: string,
+  ): Promise<SaleResponse> {
+    return this.cancelOrExpire(id, organizationId, {
+      reason,
+      actorId: null,
+      allowedStatus: 'AWAITING_PAYMENT',
+      guardMessage: 'Seule une vente en attente de paiement (AWAITING_PAYMENT) peut expirer.',
+    });
+  }
+
+  /**
+   * Cœur commun de cancel()/expireAwaitingPayment() : restitue le stock — même regroupement/
+   * conversion d'unité que validate(), delta positif — puis fait passer le statut à CANCELLED.
+   * Le tout dans une seule transaction Serializable, vente et lignes relues DANS la
+   * transaction (même patron anti-TOCTOU que validate()). `allowedStatus` est un statut
+   * UNIQUE (pas un ensemble) : c'est précisément ce qui empêche un appelant de traiter
+   * COMPLETED et AWAITING_PAYMENT comme interchangeables (cf. JSDoc expireAwaitingPayment).
+   */
+  private async cancelOrExpire(
+    id: string,
+    organizationId: string,
+    {
+      reason,
+      actorId,
+      allowedStatus,
+      guardMessage,
+    }: { reason: string; actorId: string | null; allowedStatus: DocumentStatus; guardMessage: string },
   ): Promise<SaleResponse> {
     let stockUpdates: StockUpdate[] = [];
     let capturedWarehouseId!: string;
@@ -382,11 +435,8 @@ export class SaleService {
           if (existing.organizationId !== organizationId) {
             throw new ForbiddenException('Accès refusé.');
           }
-          if (existing.status !== 'COMPLETED' && existing.status !== 'AWAITING_PAYMENT') {
-            throw new BadRequestException(
-              'Seule une vente validée (COMPLETED) ou en attente de paiement mobile money ' +
-                '(AWAITING_PAYMENT) peut être annulée.',
-            );
+          if (existing.status !== allowedStatus) {
+            throw new BadRequestException(guardMessage);
           }
 
           capturedWarehouseId = existing.warehouseId;

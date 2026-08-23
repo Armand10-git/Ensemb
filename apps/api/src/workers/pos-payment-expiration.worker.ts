@@ -15,12 +15,14 @@ export interface PosPaymentExpirationJobData {
  * jamais dans le process HTTP.
  *
  * Un seul job : `pos.expirePayment`, enfilé par PosService.createSale avec un délai
- * POS_PAYMENT_TIMEOUT_MS (défaut 3 min) à la création d'une vente MOBILE_MONEY.
+ * POS_PAYMENT_TIMEOUT_MS (défaut 3 min) à la création d'une vente CARD ou MOBILE_MONEY (S31).
  *
- * Réutilise SaleService.cancel() (S21b) tel quel — c'est la mécanique de restitution de
- * stock exacte dont a besoin l'expiration, cf. JSDoc de SaleService.cancel(). Aucun contexte
- * HTTP dans un processor : @Auditable (qui lit req.user) ne s'applique pas ici — l'audit est
- * journalisé directement via AuditService.create(actorType: 'SYSTEM', actorId: null).
+ * Appelle SaleService.expireAwaitingPayment() (S31 — distincte de cancel(), réservée à
+ * l'annulation manuelle d'une vente COMPLETED) : n'accepte QUE le statut AWAITING_PAYMENT,
+ * pour ne jamais restituer le stock une seconde fois si le webhook de confirmation a gagné
+ * la course entre-temps (vente déjà COMPLETED), cf. JSDoc de SaleService.expireAwaitingPayment().
+ * Aucun contexte HTTP dans un processor : @Auditable (qui lit req.user) ne s'applique pas ici —
+ * l'audit est journalisé directement via AuditService.create(actorType: 'SYSTEM', actorId: null).
  */
 @Processor('pos-payment-expiration')
 export class PosPaymentExpirationWorker extends WorkerHost {
@@ -46,10 +48,11 @@ export class PosPaymentExpirationWorker extends WorkerHost {
     }
 
     try {
-      const cancelled = await this.saleService.cancel(saleId, organizationId, {
-        reason: 'Expiration du délai de paiement mobile money',
-        actorId: null,
-      });
+      const cancelled = await this.saleService.expireAwaitingPayment(
+        saleId,
+        organizationId,
+        'Expiration du délai de paiement mobile money',
+      );
 
       await this.auditService.create({
         organizationId,

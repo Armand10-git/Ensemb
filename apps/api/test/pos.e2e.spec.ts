@@ -11,7 +11,7 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { BadRequestException, INestApplication } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
@@ -30,8 +30,10 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { RealtimeModule } from '../src/modules/realtime/realtime.module';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { SalesModule } from '../src/modules/sales/sale.module';
+import { SaleService } from '../src/modules/sales/sale.service';
 import { BillingModule } from '../src/modules/billing/billing.module';
 import { PosModule } from '../src/modules/pos/pos.module';
+import { PosService } from '../src/modules/pos/pos.service';
 
 jest.setTimeout(40_000);
 
@@ -52,6 +54,8 @@ let pwId: string;
 let userAId: string;
 let cashSessionAId: string;
 let warehouseNoSessionId: string;
+let posService: PosService;
+let saleService: SaleService;
 
 const PERMS = ['sales.create', 'sales.view'];
 
@@ -173,6 +177,9 @@ beforeAll(async () => {
   app.setGlobalPrefix('api/v1');
   await app.init();
 
+  posService = moduleRef.get(PosService);
+  saleService = moduleRef.get(SaleService);
+
   async function login(orgId: string, email: string): Promise<string> {
     const res = await supertest(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -187,6 +194,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+  // paymentWithCreditCard AVANT paymentSale (FK payment_with_credit_card_paymentSaleId_fkey) —
+  // nécessaire depuis l'ajout des tests de compétition webhook/expiration CARD (S31) qui créent
+  // désormais des PaymentWithCreditCard dans ce fichier.
+  await prisma.paymentWithCreditCard.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.paymentSale.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
   await prisma.saleDetail.deleteMany({ where: { sale: { organizationId: { in: [orgAId, orgBId] } } } });
   await prisma.sale.deleteMany({ where: { organizationId: { in: [orgAId, orgBId] } } });
@@ -332,7 +343,7 @@ describe('POST /api/v1/pos/sales', () => {
     expect(new Decimal(pw!.quantity).toString()).toBe('50');
   });
 
-  it('201 — CARD : change à 0, montant réglé exact', async () => {
+  it('201 — CARD : status AWAITING_PAYMENT, stock déjà décrémenté, lien de paiement retourné, aucun PaymentSale (S31 — CARD suit désormais le même flux asynchrone que MOBILE_MONEY)', async () => {
     await resetStock('50');
 
     const res = await asA('post', '/api/v1/pos/sales').send({
@@ -343,9 +354,15 @@ describe('POST /api/v1/pos/sales', () => {
     });
 
     expect(res.status).toBe(201);
+    expect(res.body.status).toBe('AWAITING_PAYMENT');
+    expect(typeof res.body.paymentLink).toBe('string');
+    expect(res.body.paymentLink).toMatch(/^https:\/\/pay\.test\/mock-/);
+
+    const pw = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+    expect(new Decimal(pw!.quantity).toString()).toBe('48');
+
     const payments = await prisma.paymentSale.findMany({ where: { saleId: res.body.id as string } });
-    expect(new Decimal(payments[0]!.change ?? '0').toString()).toBe('0');
-    expect(new Decimal(payments[0]!.amount).toString()).toBe('2000');
+    expect(payments).toHaveLength(0);
   });
 
   it('400 — stock insuffisant : message clair, aucun décrément, aucune vente créée', async () => {
@@ -431,6 +448,112 @@ describe('POST /api/v1/pos/sales', () => {
 
       const pw = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
       expect(new Decimal(pw!.quantity).toString()).toBe('0');
+    },
+  );
+});
+
+// ─── Compétition confirmation webhook vs expiration — CARD (S31) ───────────────
+//
+// Le webhook mobile money (S22) et le webhook carte (S31) partagent désormais exactement le
+// même flux asynchrone (AWAITING_PAYMENT + PosPaymentExpirationWorker, cf. JSDoc de
+// PosService) : la variante CARD de cette compétition webhook/expiration devait déjà être
+// couverte, pas seulement MOBILE_MONEY. Les méthodes de service sont appelées directement
+// (PosService.confirmAsyncPayment, SaleService.expireAwaitingPayment — exactement l'appel
+// que fait PosPaymentExpirationWorker.process(), S31) plutôt que d'attendre un vrai délai
+// BullMQ, comme le fait déjà pos-payment-expiration.worker.spec.ts.
+
+describe('Compétition confirmation webhook vs expiration — CARD (absence de double restitution)', () => {
+  const CARD_CONFIRMATION = {
+    provider: 'CARD' as const,
+    providerCustomerId: 'card-cust-race',
+    providerTransactionId: 'card-txn-race',
+  };
+
+  /** Crée une vente POS CARD (AWAITING_PAYMENT) à partir d'un stock remis à 50. */
+  async function createCardSale(quantity: string): Promise<string> {
+    await resetStock('50');
+    const res = await asA('post', '/api/v1/pos/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      details: [{ productId: productAId, price: '1000', quantity }],
+      paymentMethod: 'CARD',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('AWAITING_PAYMENT');
+    return res.body.id as string;
+  }
+
+  it(
+    "confirmation webhook réussit avant l'expiration (retardée) → la vente payée n'est " +
+      'JAMAIS repassée CANCELLED, son stock JAMAIS restitué une seconde fois',
+    async () => {
+      const saleId = await createCardSale('2');
+      const pwAfterCreate = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+      expect(new Decimal(pwAfterCreate!.quantity).toString()).toBe('48');
+
+      // 1. Le paiement carte est confirmé par l'agrégateur (webhook) — AWAITING_PAYMENT → COMPLETED.
+      await posService.confirmAsyncPayment(orgAId, saleId, CARD_CONFIRMATION);
+      const saleAfterConfirm = await prisma.sale.findUnique({ where: { id: saleId } });
+      expect(saleAfterConfirm!.status).toBe('COMPLETED');
+
+      // 2. Le job d'expiration différé (enfilé à la création) se déclenche ensuite, en retard —
+      //    exactement l'appel que fait PosPaymentExpirationWorker.process(). BadRequestException
+      //    est absorbée en production par le worker (no-op) ; toute autre exception est un échec réel.
+      try {
+        await saleService.expireAwaitingPayment(
+          saleId,
+          orgAId,
+          'Expiration du délai de paiement mobile money',
+        );
+      } catch (err) {
+        if (!(err instanceof BadRequestException)) throw err;
+      }
+
+      // 3. Invariant métier : une vente déjà payée ne doit jamais être annulée ni restituée une
+      //    deuxième fois par l'expiration tardive — le client a payé, le produit est vendu.
+      const saleAfterExpiration = await prisma.sale.findUnique({ where: { id: saleId } });
+      expect(saleAfterExpiration!.status).toBe('COMPLETED');
+
+      const pwAfterExpiration = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+      expect(new Decimal(pwAfterExpiration!.quantity).toString()).toBe('48');
+
+      const payments = await prisma.paymentSale.findMany({ where: { saleId } });
+      expect(payments).toHaveLength(1);
+    },
+    15_000,
+  );
+
+  it(
+    "expiration s'exécute avant la confirmation → CANCELLED, stock restitué UNE SEULE FOIS ; " +
+      'confirmation webhook tardive ensuite → no-op, jamais de PaymentSale sur une vente CANCELLED',
+    async () => {
+      const saleId = await createCardSale('3');
+      const pwAfterCreate = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+      expect(new Decimal(pwAfterCreate!.quantity).toString()).toBe('47');
+
+      // 1. Expiration en premier — exactement l'appel que fait PosPaymentExpirationWorker.process().
+      await saleService.expireAwaitingPayment(
+        saleId,
+        orgAId,
+        'Expiration du délai de paiement mobile money',
+      );
+      const saleAfterExpiration = await prisma.sale.findUnique({ where: { id: saleId } });
+      expect(saleAfterExpiration!.status).toBe('CANCELLED');
+
+      const pwAfterExpiration = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+      expect(new Decimal(pwAfterExpiration!.quantity).toString()).toBe('50');
+
+      // 2. Confirmation webhook tardive — la vente n'est plus AWAITING_PAYMENT : no-op idempotent.
+      await posService.confirmAsyncPayment(orgAId, saleId, CARD_CONFIRMATION);
+
+      const saleAfterLateConfirm = await prisma.sale.findUnique({ where: { id: saleId } });
+      expect(saleAfterLateConfirm!.status).toBe('CANCELLED');
+
+      const pwAfterLateConfirm = await prisma.productWarehouse.findUnique({ where: { id: pwId } });
+      expect(new Decimal(pwAfterLateConfirm!.quantity).toString()).toBe('50');
+
+      const payments = await prisma.paymentSale.findMany({ where: { saleId } });
+      expect(payments).toHaveLength(0);
     },
   );
 });

@@ -8,7 +8,8 @@
  *     pour le test de confirmation complet)
  *
  * Module minimal : ConfigModule, PrismaModule, AuditModule, EncryptionModule, SmtpModule,
- * BillingModule, PosModule (le webhook POS vit dans PosModule depuis S22).
+ * BillingModule, PosModule, PaymentsWebhookModule (webhook paiement généralisé POS/vente
+ * classique — vivait dans PosModule jusqu'à S22, déplacé dans PaymentsWebhookModule en S31).
  */
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -28,6 +29,7 @@ import { AuditModule } from '../src/modules/audit/audit.module';
 import { SmtpModule } from '../src/modules/smtp/smtp.module';
 import { BillingModule } from '../src/modules/billing/billing.module';
 import { PosModule } from '../src/modules/pos/pos.module';
+import { PaymentsWebhookModule } from '../src/modules/payment-gateway/payments-webhook.module';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { PrismaService } from '../src/common/prisma.service';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
@@ -77,6 +79,10 @@ describe('EncryptionService + SmtpServer + webhook idempotence (e2e)', () => {
         SmtpModule,
         BillingModule,
         PosModule,
+        // Le webhook paiement généralisé vit désormais dans PaymentsWebhookModule (S31, plus
+        // dans PosModule — cf. JSDoc de PosModule) : requis pour que la route
+        // POST /webhooks/payments/:organizationId existe dans ce module de test minimal.
+        PaymentsWebhookModule,
       ],
       providers: [JwtStrategy],
     }).compile();

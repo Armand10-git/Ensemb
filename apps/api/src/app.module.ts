@@ -32,6 +32,8 @@ import { PosModule } from './modules/pos/pos.module';
 import { ReturnsModule } from './modules/returns/returns.module';
 import { QuotationsModule } from './modules/quotations/quotation.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
+import { PaymentGatewayModule } from './modules/payment-gateway/payment-gateway.module';
+import { PaymentsWebhookModule } from './modules/payment-gateway/payments-webhook.module';
 
 @Module({
   imports: [
@@ -75,6 +77,8 @@ import { ExpensesModule } from './modules/expenses/expenses.module';
     ReturnsModule,
     QuotationsModule,
     ExpensesModule,
+    PaymentGatewayModule,
+    PaymentsWebhookModule,
   ],
 })
 export class AppModule {}

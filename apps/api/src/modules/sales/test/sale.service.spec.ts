@@ -698,7 +698,7 @@ describe('SaleService', () => {
       expect(result.status).toBe('CANCELLED');
     });
 
-    it('actorId null (job d\'expiration système) → cancelledById persisté à null', async () => {
+    it('actorId null → cancelledById persisté à null', async () => {
       prisma.sale.findUnique.mockResolvedValue(
         makeCancelSale([
           { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('1') },
@@ -751,30 +751,21 @@ describe('SaleService', () => {
       expect(delta.toString()).toBe('5');
     });
 
-    it('statut AWAITING_PAYMENT (expiration POS mobile money, S22) → restitution acceptée', async () => {
-      prisma.sale.findUnique.mockResolvedValue(
-        makeSale({
-          status: 'AWAITING_PAYMENT',
-          details: [
-            { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
-          ],
-        }),
-      );
-      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
-      prisma.unit.findMany.mockResolvedValue([]);
-      mockCancelHappyPath({ pwQuantity: '8', newQuantity: '10' });
+    it(
+      'statut AWAITING_PAYMENT → BadRequestException (S31 : cancel() est réservé à ' +
+        "l'annulation manuelle d'une vente COMPLETED — l'expiration d'une réservation POS " +
+        'passe exclusivement par expireAwaitingPayment(), pour ne jamais restituer le stock ' +
+        'une seconde fois si le webhook de confirmation gagne la course, cf. describe ' +
+        'expireAwaitingPayment ci-dessous)',
+      async () => {
+        prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'AWAITING_PAYMENT' }));
 
-      const result = await service.cancel(SALE_ID, ORG_A, {
-        reason: 'Expiration du délai de paiement mobile money',
-        actorId: null,
-      });
-
-      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
-      expect(prisma.sale.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED' }) }),
-      );
-      expect(result.status).toBe('CANCELLED');
-    });
+        await expect(
+          service.cancel(SALE_ID, ORG_A, { reason: REASON, actorId: USER_ID }),
+        ).rejects.toThrow(BadRequestException);
+        expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+      },
+    );
 
     it('statut PENDING → BadRequestException (seule une vente COMPLETED peut être annulée)', async () => {
       prisma.sale.findUnique.mockResolvedValue(makeCancelSale([]));
@@ -849,6 +840,109 @@ describe('SaleService', () => {
         'stock:updated',
         expect.objectContaining({ warehouseId: WH_ID }),
       );
+    });
+  });
+
+  // ─── expireAwaitingPayment (S31) ─────────────────────────────────────────
+
+  describe('expireAwaitingPayment', () => {
+    const EXPIRE_REASON = 'Expiration du délai de paiement mobile money';
+
+    function mockExpireHappyPath(opts: { pwQuantity: string; newQuantity: string }) {
+      prisma.productWarehouse.findFirst.mockResolvedValue({
+        id: PW_ID,
+        version: 0,
+        quantity: new Decimal(opts.pwQuantity),
+        product: { stockAlert: 0, name: 'Produit' },
+      });
+      productWarehouseService.adjustStock.mockResolvedValue({
+        id: PW_ID,
+        productId: PROD_ID,
+        productVariantId: null,
+        warehouseId: WH_ID,
+        quantity: new Decimal(opts.newQuantity),
+        version: 1,
+      });
+      prisma.sale.update.mockResolvedValue({});
+      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeSale({ status: 'CANCELLED' }));
+    }
+
+    it('statut AWAITING_PAYMENT → restitution acceptée, cancelledById toujours null', async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({
+          status: 'AWAITING_PAYMENT',
+          details: [
+            { id: 'det1', productId: PROD_ID, productVariantId: null, saleUnitId: null, quantity: new Decimal('2') },
+          ],
+        }),
+      );
+      prisma.product.findMany.mockResolvedValue([{ id: PROD_ID, unitId: UNIT_PIECE }]);
+      prisma.unit.findMany.mockResolvedValue([]);
+      mockExpireHappyPath({ pwQuantity: '8', newQuantity: '10' });
+
+      const result = await service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON);
+
+      expect(productWarehouseService.adjustStock).toHaveBeenCalledTimes(1);
+      expect(prisma.sale.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'CANCELLED',
+            cancelReason: EXPIRE_REASON,
+            cancelledById: null,
+          }),
+        }),
+      );
+      expect(result.status).toBe('CANCELLED');
+    });
+
+    it(
+      'statut COMPLETED → BadRequestException (S31 : le webhook a gagné la course — ' +
+        "l'expiration NE DOIT JAMAIS restituer le stock d'une vente déjà payée)",
+      async () => {
+        prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'COMPLETED' }));
+
+        await expect(
+          service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON),
+        ).rejects.toThrow(BadRequestException);
+        expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+      },
+    );
+
+    it('statut déjà CANCELLED → BadRequestException (pas de double restitution)', async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'CANCELLED' }));
+
+      await expect(
+        service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON),
+      ).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('statut PENDING → BadRequestException', async () => {
+      prisma.sale.findUnique.mockResolvedValue(makeSale({ status: 'PENDING' }));
+
+      await expect(
+        service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON),
+      ).rejects.toThrow(BadRequestException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it("vente d'une autre organisation → ForbiddenException", async () => {
+      prisma.sale.findUnique.mockResolvedValue(
+        makeSale({ organizationId: ORG_B, status: 'AWAITING_PAYMENT' }),
+      );
+
+      await expect(
+        service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON),
+      ).rejects.toThrow(ForbiddenException);
+      expect(productWarehouseService.adjustStock).not.toHaveBeenCalled();
+    });
+
+    it('vente introuvable → NotFoundException', async () => {
+      prisma.sale.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.expireAwaitingPayment(SALE_ID, ORG_A, EXPIRE_REASON),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

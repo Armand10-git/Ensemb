@@ -1,10 +1,15 @@
 /**
- * Tests d'intégration — webhook mobile money POS (S22, §18.2 étape 10 ; §17 point V).
+ * Tests d'intégration — webhook paiement généralisé, POS carte/mobile money (S22, §18.2
+ * étape 10 ; généralisé S31, §17 point V).
  *
  * Couvre :
- *  - Confirmation : vente AWAITING_PAYMENT → COMPLETED + PaymentSale créé
+ *  - Confirmation : vente AWAITING_PAYMENT → COMPLETED + PaymentSale + PaymentWithCreditCard créés
  *  - Idempotence : rejeu du même providerEventId → no-op, pas de second PaymentSale
  *  - Vente déjà expirée (CANCELLED) : confirmation tardive → no-op, jamais d'erreur
+ *
+ * Le pendant vente classique (OnlinePaymentIntent) est couvert par un fichier e2e séparé
+ * (sale-online-payment.e2e.spec.ts) — celui-ci se concentre sur le flux POS + le contrat commun
+ * du contrôleur webhook généralisé (signature par organisation, idempotence).
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -27,8 +32,9 @@ import { AuthModule } from '../src/modules/auth/auth.module';
 import { RealtimeModule } from '../src/modules/realtime/realtime.module';
 import { TenancyModule } from '../src/tenancy/tenancy.module';
 import { SalesModule } from '../src/modules/sales/sale.module';
-import { BillingModule } from '../src/modules/billing/billing.module';
 import { PosModule } from '../src/modules/pos/pos.module';
+import { PaymentGatewayModule } from '../src/modules/payment-gateway/payment-gateway.module';
+import { PaymentsWebhookModule } from '../src/modules/payment-gateway/payments-webhook.module';
 
 jest.setTimeout(40_000);
 
@@ -132,8 +138,9 @@ beforeAll(async () => {
       TenancyModule,
       RealtimeModule,
       SalesModule,
-      BillingModule,
       PosModule,
+      PaymentGatewayModule,
+      PaymentsWebhookModule,
     ],
   }).compile();
 
@@ -152,6 +159,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
   await prisma.webhookEvent.deleteMany({ where: { organizationId: orgId } });
+  await prisma.paymentWithCreditCard.deleteMany({ where: { organizationId: orgId } });
   await prisma.paymentSale.deleteMany({ where: { organizationId: orgId } });
   await prisma.saleDetail.deleteMany({ where: { sale: { organizationId: orgId } } });
   await prisma.sale.deleteMany({ where: { organizationId: orgId } });
@@ -193,12 +201,26 @@ function postWebhook(payload: object) {
     .send(payload);
 }
 
+/** Champs agrégateur requis à la confirmation (S31) — rapportés par le webhook, jamais saisis. */
+function aggregatorFields(providerEventId: string) {
+  return {
+    channel: 'ORANGE_MONEY',
+    providerCustomerId: `cust-${providerEventId}`,
+    providerTransactionId: `txn-${providerEventId}`,
+  };
+}
+
 describe('POST /api/v1/webhooks/payments/:organizationId — mobile money POS', () => {
-  it('200 — confirme la vente (AWAITING_PAYMENT → COMPLETED) et crée le PaymentSale', async () => {
+  it('200 — confirme la vente (AWAITING_PAYMENT → COMPLETED), crée PaymentSale + PaymentWithCreditCard', async () => {
     const saleId = await createMobileMoneySale();
     const providerEventId = `evt-confirm-${saleId}`;
 
-    const res = await postWebhook({ type: 'payment.success', providerEventId, saleId });
+    const res = await postWebhook({
+      type: 'payment.success',
+      providerEventId,
+      saleId,
+      ...aggregatorFields(providerEventId),
+    });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ received: true });
@@ -209,12 +231,24 @@ describe('POST /api/v1/webhooks/payments/:organizationId — mobile money POS', 
     const payments = await prisma.paymentSale.findMany({ where: { saleId } });
     expect(payments).toHaveLength(1);
     expect(payments[0]!.method).toBe('MOBILE_MONEY');
+
+    const cardPayments = await prisma.paymentWithCreditCard.findMany({
+      where: { paymentSaleId: payments[0]!.id },
+    });
+    expect(cardPayments).toHaveLength(1);
+    expect(cardPayments[0]!.provider).toBe('ORANGE_MONEY');
+    expect(cardPayments[0]!.providerTransactionId).toBe(`txn-${providerEventId}`);
   }, 15_000);
 
   it('rejeu du même providerEventId → 200, un seul PaymentSale (idempotence)', async () => {
     const saleId = await createMobileMoneySale();
     const providerEventId = `evt-replay-${saleId}`;
-    const payload = { type: 'payment.success', providerEventId, saleId };
+    const payload = {
+      type: 'payment.success',
+      providerEventId,
+      saleId,
+      ...aggregatorFields(providerEventId),
+    };
 
     await postWebhook(payload).expect(200);
     await postWebhook(payload).expect(200);
@@ -222,7 +256,9 @@ describe('POST /api/v1/webhooks/payments/:organizationId — mobile money POS', 
     const payments = await prisma.paymentSale.findMany({ where: { saleId } });
     expect(payments).toHaveLength(1);
 
-    const events = await prisma.webhookEvent.findMany({ where: { provider: 'pos-aggregator', providerEventId } });
+    const events = await prisma.webhookEvent.findMany({
+      where: { provider: 'payment-aggregator', providerEventId },
+    });
     expect(events).toHaveLength(1);
   }, 20_000);
 
@@ -233,7 +269,13 @@ describe('POST /api/v1/webhooks/payments/:organizationId — mobile money POS', 
       data: { status: 'CANCELLED', cancelReason: 'Expiration du délai de paiement mobile money', cancelledAt: new Date() },
     });
 
-    const res = await postWebhook({ type: 'payment.success', providerEventId: `evt-late-${saleId}`, saleId });
+    const providerEventId = `evt-late-${saleId}`;
+    const res = await postWebhook({
+      type: 'payment.success',
+      providerEventId,
+      saleId,
+      ...aggregatorFields(providerEventId),
+    });
 
     expect(res.status).toBe(200);
     const payments = await prisma.paymentSale.findMany({ where: { saleId } });
