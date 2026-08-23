@@ -191,4 +191,64 @@ describe('TenantPaymentGatewayService', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('production sans agrégateur actif (revue sécurité S31)', () => {
+    it(
+      'verifyWebhookSignature retourne false (PAS true) — sans cette garde, n\'importe quel ' +
+        "appelant public pourrait confirmer un paiement jamais effectué pour toute organisation " +
+        "n'ayant pas configuré son agrégateur, l'état par défaut",
+      async () => {
+        const credentialService = makeCredentialService({});
+        const config = makeConfig({ NODE_ENV: 'production' });
+        const svc = new TenantPaymentGatewayService(
+          credentialService as unknown as PaymentGatewayCredentialService,
+          config as never,
+        );
+
+        const result = await svc.verifyWebhookSignature(
+          ORG_A,
+          Buffer.from('payload'),
+          'n-importe-quoi',
+        );
+
+        expect(result).toBe(false);
+      },
+    );
+
+    it('generatePaymentLink lève une exception plutôt qu\'un lien fictif silencieux', async () => {
+      const credentialService = makeCredentialService({});
+      const config = makeConfig({ NODE_ENV: 'production' });
+      const svc = new TenantPaymentGatewayService(
+        credentialService as unknown as PaymentGatewayCredentialService,
+        config as never,
+      );
+      const fetchSpy = jest.fn();
+      global.fetch = fetchSpy as never;
+
+      await expect(
+        svc.generatePaymentLink(ORG_A, {
+          amount: new Decimal('1500'),
+          currency: 'XAF',
+          reference: 'ref-1',
+          callbackUrl: 'http://localhost/callback',
+        }),
+      ).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('un credential actif reste vérifié normalement en production (pas de régression)', async () => {
+      const credentialService = makeCredentialService({ [ORG_A]: CREDENTIAL_A });
+      const config = makeConfig({ NODE_ENV: 'production' });
+      const svc = new TenantPaymentGatewayService(
+        credentialService as unknown as PaymentGatewayCredentialService,
+        config as never,
+      );
+      const payload = Buffer.from(JSON.stringify({ type: 'payment.success' }));
+      const signature = createHmac('sha256', CREDENTIAL_A.webhookSecret).update(payload).digest('hex');
+
+      const result = await svc.verifyWebhookSignature(ORG_A, payload, signature);
+
+      expect(result).toBe(true);
+    });
+  });
 });

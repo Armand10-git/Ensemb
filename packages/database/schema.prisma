@@ -1,5 +1,9 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" pour le dev local (Windows) ; linux-musl-openssl-3.0.x pour les images Docker
+  // (node:20-alpine embarque OpenSSL 3.0 — la détection auto de "native" à l'intérieur du
+  // conteneur produit à tort le moteur lié à OpenSSL 1.1, absent de cette image).
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
