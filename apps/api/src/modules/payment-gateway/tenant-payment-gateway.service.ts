@@ -23,8 +23,19 @@ export interface TenantPaymentLinkParams {
  * l'écriture, elle ne fait que router vers le compte marchand du tenant.
  *
  * Mode test : si `getDecryptedCredential` retourne `null` (aucune configuration OU
- * `isActive === false`), on bascule en mode test — jamais d'exception — mirror exact du
- * comportement de `PaymentAggregatorService.isTestMode`.
+ * `isActive === false`) ET que l'environnement n'est PAS `production`, on bascule en mode
+ * test. Cette dernière condition est impérative (revue sécurité S31) : contrairement à
+ * `PaymentAggregatorService.isTestMode` (identifiants PLATEFORME, contrôlés par l'exploitant
+ * via des variables d'environnement — §17 « environnement de confiance »), l'absence de
+ * `PaymentGatewayCredential` est un état accessible en libre-service par CHAQUE organisation
+ * (`PUT /organizations/settings/payment-gateway`, permission `organization.settings.edit`) —
+ * c'est l'état PAR DÉFAUT de toute organisation qui n'a pas encore configuré son agrégateur.
+ * Sans la garde `NODE_ENV`, `verifyWebhookSignature` accepterait TOUJOURS n'importe quelle
+ * signature (ou son absence) pour ces organisations, permettant à n'importe quel appelant du
+ * webhook public de confirmer un paiement CARD/MOBILE_MONEY jamais réellement effectué — un
+ * contournement complet de paiement, pas une simple facilité de développement. En production,
+ * l'absence de credential actif fait donc échouer la vérification de signature (webhook
+ * rejeté) et la génération de lien (exception), plutôt que de les court-circuiter.
  */
 @Injectable()
 export class TenantPaymentGatewayService {
@@ -43,7 +54,10 @@ export class TenantPaymentGatewayService {
    * @param params Montant (Decimal — jamais Float), devise, référence (ex. UUID de vente/facture)
    *   et URL de callback à notifier par l'agrégateur.
    * @returns URL de paiement hébergée par l'agrégateur, ou un lien fictif `https://pay.test/mock-*`
-   *   si l'organisation n'a pas (ou plus) de compte agrégateur actif (mode test).
+   *   si l'organisation n'a pas (ou plus) de compte agrégateur actif ET que l'environnement
+   *   n'est pas `production` (mode test — voir JSDoc de classe).
+   * @throws Error si l'organisation n'a pas de compte agrégateur actif EN PRODUCTION — jamais de
+   *   lien fictif silencieux dans cet environnement.
    */
   async generatePaymentLink(
     organizationId: string,
@@ -52,6 +66,11 @@ export class TenantPaymentGatewayService {
     const credential = await this.credentialService.getDecryptedCredential(organizationId);
 
     if (!credential) {
+      if (!this.isPlatformTestMode()) {
+        throw new Error(
+          `Organisation ${organizationId} : aucun agrégateur de paiement actif configuré.`,
+        );
+      }
       this.logger.log(
         `Organisation ${organizationId} sans agrégateur de paiement actif — mode test, lien fictif généré`,
       );
@@ -98,8 +117,11 @@ export class TenantPaymentGatewayService {
    * une organisation A ne doit jamais pouvoir valider une signature avec le secret d'une
    * organisation B, et réciproquement.
    *
-   * En mode test (organisation sans agrégateur actif), retourne toujours `true`, mirror exact
-   * de `PaymentAggregatorService.verifyWebhookSignature`.
+   * En mode test (organisation sans agrégateur actif ET environnement non-production),
+   * retourne toujours `true`. EN PRODUCTION, une organisation sans agrégateur actif ne peut
+   * jamais avoir de webhook valide : retourne `false` (voir JSDoc de classe — sans cette
+   * garde, n'importe qui pourrait confirmer un paiement jamais effectué pour toute
+   * organisation n'ayant pas configuré son agrégateur, l'état par défaut).
    *
    * @param organizationId Tenant propriétaire du webhook (jamais déduit du payload — fourni par
    *   la route, ex. `:organizationId` du callback).
@@ -114,7 +136,13 @@ export class TenantPaymentGatewayService {
     const credential = await this.credentialService.getDecryptedCredential(organizationId);
 
     if (!credential) {
-      return true;
+      if (this.isPlatformTestMode()) {
+        return true;
+      }
+      this.logger.warn(
+        `Organisation ${organizationId} sans agrégateur de paiement actif — webhook rejeté (production)`,
+      );
+      return false;
     }
 
     try {
@@ -131,5 +159,15 @@ export class TenantPaymentGatewayService {
       this.logger.error(`Erreur lors de la vérification HMAC — org ${organizationId}`, err);
       return false;
     }
+  }
+
+  /**
+   * `true` hors production — c'est la seule condition qui autorise le mode test (lien fictif,
+   * signature toujours acceptée) pour une organisation sans agrégateur actif. Contrôlée par
+   * `NODE_ENV`, une variable d'environnement de confiance posée par l'exploitant (jamais par
+   * un tenant) — voir JSDoc de classe pour le raisonnement de sécurité complet.
+   */
+  private isPlatformTestMode(): boolean {
+    return this.config.get<string>('NODE_ENV') !== 'production';
   }
 }

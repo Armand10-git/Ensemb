@@ -6,6 +6,9 @@ build
 .env.local
 *.log
 
+# Fichiers générés à l'exécution (exports clients/produits/etc., S24) — jamais versionnés
+apps/api/storage/
+
 # Fichiers internes Claude Code — ne pas versionner
 CLAUDE.md
 PROMPTS.md

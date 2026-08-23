@@ -1,14 +1,19 @@
-# Exclure les dossiers de build et caches — mais PAS node_modules (copié dans l'image)
+# Exclure les dossiers de build et caches
 .git
 .turbo
 *.log
 .env
 .env.local
 
-# Exclure les dist des packages (seuls apps/api/dist et apps/web/dist sont copiés explicitement)
+# Exclure les dist des packages (apps/web/dist est copié explicitement par apps/web/Dockerfile ;
+# apps/api/dist est reconstruit dans le stage builder de apps/api/Dockerfile, jamais copié depuis
+# l'hôte)
 packages/*/dist
+apps/api/dist
 apps/mobile
 
-# Exclure les node_modules des sous-packages (le root node_modules hoisted est utilisé)
+# node_modules jamais copiés depuis l'hôte : symlinks pnpm absolus Windows incompatibles Linux.
+# apps/api/Dockerfile fait un `pnpm install` frais dans son stage builder (conteneur Linux).
+node_modules
 apps/*/node_modules
 packages/*/node_modules
