@@ -3,6 +3,7 @@ import { PrismaModule } from '../../common/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationModule } from '../notifications/notification.module';
+import { MessagingQueueModule } from '../messaging/messaging-queue.module';
 import { SaleReturnService } from './sale-return.service';
 import { SaleReturnController } from './sale-return.controller';
 import { PurchaseReturnService } from './purchase-return.service';
@@ -22,9 +23,11 @@ import { PaymentPurchaseReturnController } from './payment-purchase-return.contr
  * InventoryModule pour ProductWarehouseService (adjustStock, verrouillage optimiste).
  * NotificationModule pour stock:lowAlert persisté (PurchaseReturnService uniquement —
  * un retour fournisseur diminue le stock, contrairement à un retour de vente).
+ * MessagingQueueModule (S32) pour injecter la file BullMQ 'email' (envoi du récapitulatif
+ * de retour de vente et de retour fournisseur).
  */
 @Module({
-  imports: [PrismaModule, RealtimeModule, InventoryModule, NotificationModule],
+  imports: [PrismaModule, RealtimeModule, InventoryModule, NotificationModule, MessagingQueueModule],
   controllers: [
     SaleReturnController,
     PurchaseReturnController,

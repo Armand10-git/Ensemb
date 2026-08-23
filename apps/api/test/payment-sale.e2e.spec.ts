@@ -15,8 +15,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import supertest from 'supertest';
@@ -126,6 +127,12 @@ beforeAll(async () => {
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
       ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+      BullModule.forRootAsync({
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) => ({
+          connection: { url: config.get<string>('REDIS_URL') ?? 'redis://localhost:6380' },
+        }),
+      }),
       PassportModule,
       JwtModule.register({}),
       PrismaModule,
@@ -425,5 +432,75 @@ describe('DELETE /api/v1/sales/payments/:id', () => {
 
     const stillThere = await prisma.paymentSale.findUnique({ where: { id: created.body.id as string } });
     expect(stillThere).not.toBeNull();
+  });
+});
+
+// ─── POST /sales/payments/:id/send (S32) ───────────────────────────────────────
+// Envoie le reçu d'un paiement de vente au client par email — enfile un job BullMQ
+// fire-and-forget sur la file 'email' (mode test, aucun appel réseau réel). Client dédié à ce
+// describe (email renseigné), distinct de clientAId (sans contact renseigné, réutilisé tel quel
+// par les tests précédents) pour ne risquer aucune régression sur les describe blocks en amont.
+
+describe('POST /api/v1/sales/payments/:id/send', () => {
+  let clientContactId: string;
+
+  beforeAll(async () => {
+    const client = await prisma.client.create({
+      data: {
+        organizationId: orgAId,
+        name: `Client Payment Contact ${SUFFIX}`,
+        code: 2,
+        email: `client-payment-send-${SUFFIX}@e2e.cm`,
+      },
+    });
+    clientContactId = client.id;
+  });
+
+  async function createSaleWithPayment(clientId: string): Promise<string> {
+    const sale = await asA('post', '/api/v1/sales').send({
+      clientId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    const payment = await asA('post', `/api/v1/sales/${sale.body.id as string}/payments`).send({
+      date: '2026-07-26T00:00:00.000Z',
+      amount: '500',
+      method: 'CASH',
+    });
+    return payment.body.id as string;
+  }
+
+  it('202 — client avec email renseigné → job enfilé', async () => {
+    const paymentId = await createSaleWithPayment(clientContactId);
+
+    const res = await asA('post', `/api/v1/sales/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it("400 — client sans adresse email enregistrée", async () => {
+    // clientAId (créé dans le beforeAll global) n'a pas d'email renseigné.
+    const paymentId = await createSaleWithPayment(clientAId);
+
+    const res = await asA('post', `/api/v1/sales/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Ce client n'a pas d'adresse email enregistrée.");
+  });
+
+  it('404 — paiement inexistant', async () => {
+    const res = await asA('post', '/api/v1/sales/payments/00000000-0000-0000-0000-000000000000/send').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas envoyer un paiement de org A', async () => {
+    const paymentId = await createSaleWithPayment(clientContactId);
+
+    const res = await asB('post', `/api/v1/sales/payments/${paymentId}/send`).send();
+
+    expect(res.status).toBe(403);
   });
 });

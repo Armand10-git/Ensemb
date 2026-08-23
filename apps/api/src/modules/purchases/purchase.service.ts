@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DocumentStatus, DocumentType, PaymentStatus, Prisma } from '@prisma/client';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { convertToBase } from '@ensemb/utils';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
@@ -171,6 +173,8 @@ export class PurchaseService {
     private readonly documentCounter: DocumentCounterService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly productWarehouseService: ProductWarehouseService,
+    @InjectQueue('email')
+    private readonly emailQueue: Queue<{ organizationId: string; purchaseId: string; to: string }>,
   ) {}
 
   /**
@@ -530,6 +534,42 @@ export class PurchaseService {
       where: { id },
       data: { deletedAt: new Date() },
     });
+  }
+
+  /**
+   * Envoie le récapitulatif d'un achat au fournisseur par email (S32, mirror exact de
+   * SaleService.send — sans le paramètre `channel`, un achat n'expose que le canal email
+   * cette session, cf. plan S32). Enfile un job BullMQ ('purchase.sendEmail', file 'email')
+   * consommé par purchase-email.worker.ts — aucun appel réseau synchrone, retourne dès que
+   * le job est enfilé.
+   *
+   * @param id - identifiant de l'achat à envoyer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
+   * @throws NotFoundException si l'achat est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si l'achat n'appartient pas à l'organisation.
+   * @throws BadRequestException si le fournisseur n'a pas d'adresse email enregistrée.
+   */
+  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+    const purchase = await this.prisma.purchase.findUnique({
+      where: { id },
+      select: { organizationId: true, deletedAt: true, provider: { select: { email: true } } },
+    });
+
+    if (!purchase || purchase.deletedAt !== null) {
+      throw new NotFoundException('Achat introuvable.');
+    }
+    if (purchase.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    const to = purchase.provider.email;
+    if (!to) {
+      throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+    }
+
+    await this.emailQueue.add('purchase.sendEmail', { organizationId, purchaseId: id, to });
+    return { status: 'queued' };
   }
 
   // ─── Helpers privés ──────────────────────────────────────────────────────────

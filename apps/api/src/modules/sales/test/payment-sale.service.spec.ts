@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PaymentSaleService } from '../payment-sale.service';
 import { PrismaService } from '../../../common/prisma.service';
@@ -64,6 +65,7 @@ describe('PaymentSaleService', () => {
   };
 
   let documentCounter: { nextReference: jest.Mock };
+  let emailQueue: { add: jest.Mock };
 
   beforeEach(async () => {
     const prismaMock = {
@@ -91,18 +93,21 @@ describe('PaymentSaleService', () => {
     });
 
     const dcMock = { nextReference: jest.fn().mockResolvedValue(REF) };
+    const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
         PaymentSaleService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: DocumentCounterService, useValue: dcMock },
+        { provide: getQueueToken('email'), useValue: emailQueueMock },
       ],
     }).compile();
 
     service = module.get(PaymentSaleService);
     prisma = prismaMock;
     documentCounter = dcMock;
+    emailQueue = emailQueueMock;
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -441,6 +446,51 @@ describe('PaymentSaleService', () => {
 
       await expect(service.remove(PAYMENT_ID, ORG_A)).rejects.toThrow(ForbiddenException);
       expect(prisma.paymentSale.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('send', () => {
+    it('enfile un job paymentSale.sendEmail sur la file email quand le client a un email', async () => {
+      prisma.paymentSale.findUnique.mockResolvedValueOnce({
+        organizationId: ORG_A,
+        sale: { client: { email: 'client@example.com' } },
+      });
+
+      const result = await service.send(PAYMENT_ID, ORG_A);
+
+      expect(result).toEqual({ status: 'queued' });
+      expect(emailQueue.add).toHaveBeenCalledWith('paymentSale.sendEmail', {
+        organizationId: ORG_A,
+        paymentId: PAYMENT_ID,
+        to: 'client@example.com',
+      });
+    });
+
+    it("lève BadRequestException si le client n'a pas d'adresse email", async () => {
+      prisma.paymentSale.findUnique.mockResolvedValueOnce({
+        organizationId: ORG_A,
+        sale: { client: { email: null } },
+      });
+
+      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(BadRequestException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('lève NotFoundException si le paiement est introuvable', async () => {
+      prisma.paymentSale.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(NotFoundException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
+    });
+
+    it("lève ForbiddenException si le paiement appartient à une autre organisation (anti-IDOR)", async () => {
+      prisma.paymentSale.findUnique.mockResolvedValueOnce({
+        organizationId: ORG_B,
+        sale: { client: { email: 'client@example.com' } },
+      });
+
+      await expect(service.send(PAYMENT_ID, ORG_A)).rejects.toThrow(ForbiddenException);
+      expect(emailQueue.add).not.toHaveBeenCalled();
     });
   });
 });

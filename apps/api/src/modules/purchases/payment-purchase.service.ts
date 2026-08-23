@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DocumentType, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
 import type { CreatePaymentDto } from './dto/create-payment.dto';
@@ -72,6 +74,8 @@ export class PaymentPurchaseService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly documentCounter: DocumentCounterService,
+    @InjectQueue('email')
+    private readonly emailQueue: Queue<{ organizationId: string; paymentId: string; to: string }>,
   ) {}
 
   /**
@@ -221,6 +225,44 @@ export class PaymentPurchaseService {
 
       await this.recomputePurchaseStatus(tx, existing.purchaseId);
     });
+  }
+
+  /**
+   * Envoie le reçu d'un paiement d'achat au fournisseur par email (S32, mirror exact de
+   * PaymentSaleService.send). Enfile un job BullMQ ('paymentPurchase.sendEmail', file 'email')
+   * consommé par payment-receipt-email.worker.ts — aucun appel réseau synchrone, retourne dès
+   * que le job est enfilé.
+   *
+   * @param id - identifiant du paiement à envoyer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente de l'envoi réel).
+   * @throws NotFoundException si le paiement est introuvable.
+   * @throws ForbiddenException si le paiement n'appartient pas à l'organisation.
+   * @throws BadRequestException si le fournisseur n'a pas d'adresse email enregistrée.
+   */
+  async send(id: string, organizationId: string): Promise<{ status: 'queued' }> {
+    const payment = await this.prisma.paymentPurchase.findUnique({
+      where: { id },
+      select: {
+        organizationId: true,
+        purchase: { select: { provider: { select: { email: true } } } },
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Paiement introuvable.');
+    }
+    if (payment.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    const to = payment.purchase.provider.email;
+    if (!to) {
+      throw new BadRequestException("Ce fournisseur n'a pas d'adresse email enregistrée.");
+    }
+
+    await this.emailQueue.add('paymentPurchase.sendEmail', { organizationId, paymentId: id, to });
+    return { status: 'queued' };
   }
 
   // ─── Helpers privés ──────────────────────────────────────────────────────────

@@ -53,53 +53,7 @@ export class EmailService {
    *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
    */
   async sendSaleSummary(organizationId: string, params: SendEmailParams): Promise<void> {
-    if (this.isTestMode) {
-      this.logger.log(
-        `Envoi d'email simulé (mode test) — destinataire=${params.to}, sujet="${params.subject}"`,
-      );
-      return;
-    }
-
-    const smtpConfig = await this.smtpServerService.findForOrg(organizationId);
-    if (!smtpConfig) {
-      throw new BadRequestException(
-        "Aucun serveur SMTP n'est configuré pour cette organisation. " +
-          'Configurez-en un avant d\'envoyer un email.',
-      );
-    }
-
-    // Mot de passe déchiffré à la volée, jamais journalisé ni conservé au-delà de cet appel.
-    const password = await this.smtpServerService.getDecryptedPassword(organizationId);
-
-    const transporter = nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.port === 465,
-      auth: {
-        user: smtpConfig.username,
-        pass: password,
-      },
-    });
-
-    try {
-      await transporter.sendMail({
-        from: `${smtpConfig.fromName} <${smtpConfig.fromEmail}>`,
-        to: params.to,
-        subject: params.subject,
-        html: params.html,
-      });
-      this.logger.log(`Email envoyé — organisation ${organizationId}, destinataire=${params.to}`);
-    } catch (err) {
-      // Aucun détail interne (hôte, identifiants) exposé au client — message générique,
-      // détail journalisé côté serveur uniquement (§17 point « Fuites »).
-      this.logger.error(
-        `Échec de l'envoi d'email pour l'organisation ${organizationId}`,
-        err instanceof Error ? err.stack : String(err),
-      );
-      throw new BadRequestException(
-        "L'envoi de l'email a échoué. Vérifiez la configuration SMTP de l'organisation.",
-      );
-    }
+    await this.deliver(organizationId, params);
   }
 
   /**
@@ -113,6 +67,61 @@ export class EmailService {
    *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
    */
   async sendQuotationSummary(organizationId: string, params: SendEmailParams): Promise<void> {
+    await this.deliver(organizationId, params);
+  }
+
+  /**
+   * Envoie un récapitulatif d'achat par email au destinataire fourni (S32).
+   * Même patron que sendSaleSummary — cf. sa JSDoc pour la gestion du mode test et des erreurs.
+   *
+   * @param organizationId - Organisation dont la configuration SMTP est utilisée.
+   * @param params - Destinataire, sujet et corps HTML déjà rendus (cf. purchase-message.renderer.ts).
+   * @returns Rien — en mode test, l'envoi est simulé par un log (jamais de secret journalisé).
+   * @throws BadRequestException si, hors mode test, aucune configuration SMTP n'existe pour
+   *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
+   */
+  async sendPurchaseSummary(organizationId: string, params: SendEmailParams): Promise<void> {
+    await this.deliver(organizationId, params);
+  }
+
+  /**
+   * Envoie un reçu de paiement (vente ou achat) par email au destinataire fourni (S32).
+   * Même patron que sendSaleSummary — cf. sa JSDoc pour la gestion du mode test et des erreurs.
+   *
+   * @param organizationId - Organisation dont la configuration SMTP est utilisée.
+   * @param params - Destinataire, sujet et corps HTML déjà rendus (cf. payment-receipt-message.renderer.ts).
+   * @returns Rien — en mode test, l'envoi est simulé par un log (jamais de secret journalisé).
+   * @throws BadRequestException si, hors mode test, aucune configuration SMTP n'existe pour
+   *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
+   */
+  async sendPaymentReceipt(organizationId: string, params: SendEmailParams): Promise<void> {
+    await this.deliver(organizationId, params);
+  }
+
+  /**
+   * Envoie un récapitulatif de retour (vente ou achat) par email au destinataire fourni (S32).
+   * Même patron que sendSaleSummary — cf. sa JSDoc pour la gestion du mode test et des erreurs.
+   *
+   * @param organizationId - Organisation dont la configuration SMTP est utilisée.
+   * @param params - Destinataire, sujet et corps HTML déjà rendus (cf. return-message.renderer.ts).
+   * @returns Rien — en mode test, l'envoi est simulé par un log (jamais de secret journalisé).
+   * @throws BadRequestException si, hors mode test, aucune configuration SMTP n'existe pour
+   *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
+   */
+  async sendReturnSummary(organizationId: string, params: SendEmailParams): Promise<void> {
+    await this.deliver(organizationId, params);
+  }
+
+  /**
+   * Logique d'envoi commune à tous les emails transactionnels (S32 — factorisée depuis
+   * sendSaleSummary/sendQuotationSummary, dupliquées à l'identique jusqu'ici). Gère le mode
+   * test, la configuration SMTP par organisation et les erreurs — cf. JSDoc de classe pour le
+   * détail du comportement.
+   *
+   * @throws BadRequestException si, hors mode test, aucune configuration SMTP n'existe pour
+   *         l'organisation, ou si l'envoi via le serveur SMTP échoue.
+   */
+  private async deliver(organizationId: string, params: SendEmailParams): Promise<void> {
     if (this.isTestMode) {
       this.logger.log(
         `Envoi d'email simulé (mode test) — destinataire=${params.to}, sujet="${params.subject}"`,

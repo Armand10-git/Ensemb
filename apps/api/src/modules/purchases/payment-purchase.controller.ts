@@ -33,6 +33,7 @@ import type { AuthenticatedRequest } from '../auth/types/authenticated-request';
  *   GET    /api/v1/purchases/:purchaseId/payments  → historique chronologique des paiements
  *   POST   /api/v1/purchases/:purchaseId/payments  → 201 (encaisse un paiement)
  *   PATCH  /api/v1/purchases/payments/:id          → 200
+ *   POST   /api/v1/purchases/payments/:id/send     → 202 (S32 — envoi asynchrone du reçu par email)
  *   DELETE /api/v1/purchases/payments/:id          → 204 (suppression physique, cf. service)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -95,6 +96,25 @@ export class PaymentPurchaseController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.paymentPurchaseService.update(id, req.user.organizationId, result.data);
+  }
+
+  /**
+   * POST /api/v1/purchases/payments/:id/send
+   * Envoie le reçu d'un paiement d'achat au fournisseur par email (S32, mirror exact de
+   * POST /api/v1/sales/payments/:id/send) — enfile un job BullMQ traité de façon asynchrone
+   * par un worker dédié (202 Accepted). Un seul canal (email) cette session — pas de body attendu.
+   *
+   * Réutilise la permission `paymentPurchases.view` plutôt qu'une nouvelle permission dédiée.
+   */
+  @RequirePermission('paymentPurchases.view')
+  @Post('payments/:id/send')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'paymentPurchases.send', entity: 'PaymentPurchase' })
+  send(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.paymentPurchaseService.send(id, req.user.organizationId);
   }
 
   /**

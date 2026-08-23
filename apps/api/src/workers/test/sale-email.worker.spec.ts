@@ -33,7 +33,7 @@ const FAKE_SALE = {
 describe('SaleEmailWorker', () => {
   let saleService: { findOne: jest.Mock };
   let emailService: { sendSaleSummary: jest.Mock };
-  let prisma: { product: { findMany: jest.Mock } };
+  let prisma: { product: { findMany: jest.Mock }; organization: { findUnique: jest.Mock } };
   let worker: SaleEmailWorker;
 
   beforeEach(() => {
@@ -41,8 +41,9 @@ describe('SaleEmailWorker', () => {
     emailService = { sendSaleSummary: jest.fn().mockResolvedValue(undefined) };
     prisma = {
       product: { findMany: jest.fn().mockResolvedValue([{ id: 'prod-1', name: 'Produit test' }]) },
+      organization: { findUnique: jest.fn().mockResolvedValue({ logoUrl: null, primaryColor: null }) },
     };
-    worker = new SaleEmailWorker(saleService as never, emailService as never, prisma as never);
+    worker = new SaleEmailWorker(saleService as never, emailService as never, prisma as never, {} as never);
   });
 
   it('recharge la vente puis envoie le récapitulatif email avec les bons arguments', async () => {
@@ -62,6 +63,46 @@ describe('SaleEmailWorker', () => {
     );
     const html = emailService.sendSaleSummary.mock.calls[0][1].html as string;
     expect(html).toContain('Produit test');
+    // Habillage brandé (S32) — repli sur la couleur par défaut, logoUrl/primaryColor absents ici.
+    expect(html).toContain('#2FA75E');
+  });
+
+  it('applique le logo/couleur de l\'organisation au récapitulatif (S32)', async () => {
+    saleService.findOne.mockResolvedValue(FAKE_SALE);
+    prisma.organization.findUnique.mockResolvedValue({
+      logoUrl: 'https://cdn.example.com/logo.png',
+      primaryColor: '#3B82F6',
+    });
+
+    await worker.process(
+      makeJob({ organizationId: ORG_ID, saleId: SALE_ID, to: 'client@example.com' }),
+    );
+
+    const html = emailService.sendSaleSummary.mock.calls[0][1].html as string;
+    expect(html).toContain('https://cdn.example.com/logo.png');
+    expect(html).toContain('#3B82F6');
+  });
+
+  it("échec inattendu → notifie l'échec via Socket.io sur la room de l'organisation avant relance", async () => {
+    saleService.findOne.mockRejectedValue(new Error('DB down'));
+    const emit = jest.fn();
+    const rtWorker = new SaleEmailWorker(
+      saleService as never,
+      emailService as never,
+      prisma as never,
+      { server: { to: jest.fn().mockReturnValue({ emit }) } } as never,
+    );
+
+    await expect(
+      rtWorker.process(
+        makeJob({ organizationId: ORG_ID, saleId: SALE_ID, to: 'client@example.com' }),
+      ),
+    ).rejects.toThrow('DB down');
+
+    expect(emit).toHaveBeenCalledWith(
+      'email:sendFailed',
+      expect.objectContaining({ jobName: 'sale.sendEmail', reference: SALE_ID }),
+    );
   });
 
   it('vente introuvable (NotFoundException) → no-op, pas de relance', async () => {

@@ -51,6 +51,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   GET    /api/v1/sale-returns/:id         → détail avec lignes, vente d'origine, entrepôt
  *   PATCH  /api/v1/sale-returns/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/sale-returns/:id/validate → 200 (PENDING → COMPLETED, incrémente le stock)
+ *   POST   /api/v1/sale-returns/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
  *   DELETE /api/v1/sale-returns/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -165,6 +166,25 @@ export class SaleReturnController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.saleReturnService.validate(id, req.user.organizationId);
+  }
+
+  /**
+   * POST /api/v1/sale-returns/:id/send
+   * Envoie le récapitulatif d'un retour de vente au client par email (S32, mirror exact de
+   * POST /api/v1/sales/:id/send, S24) — enfile un job BullMQ traité de façon asynchrone par
+   * un worker dédié (202 Accepted). Un seul canal (email) cette session — pas de body attendu.
+   *
+   * Réutilise la permission `saleReturns.view` plutôt qu'une nouvelle permission dédiée.
+   */
+  @RequirePermission('saleReturns.view')
+  @Post(':id/send')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'saleReturns.send', entity: 'SaleReturn' })
+  send(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.saleReturnService.send(id, req.user.organizationId);
   }
 
   /**
