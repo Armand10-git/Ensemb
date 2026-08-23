@@ -428,7 +428,7 @@ describe('PATCH /api/v1/sales/:id/validate', () => {
 
   it(
     'concurrence — deux ventes simultanées sur le dernier exemplaire : exactement une 200 ' +
-      'et une 409, stock final = 0 (jamais négatif, jamais 1)',
+      'et un rejet (400 ou 409), stock final = 0 (jamais négatif, jamais 1)',
     async () => {
       await prisma.productWarehouse.update({
         where: { id: pwValId },
@@ -456,8 +456,18 @@ describe('PATCH /api/v1/sales/:id/validate', () => {
         asA('patch', `/api/v1/sales/${sale2.body.id as string}/validate`).send(),
       ]);
 
+      // Le perdant peut recevoir 409 (conflit de version détecté par adjustStock/P2034,
+      // si sa lecture de ProductWarehouse dans moveStock précède le commit du gagnant) OU
+      // 400 stock insuffisant (si sa transaction démarre après le commit du gagnant et lit
+      // légitimement quantity=0 dès la garde de moveStock, AVANT même adjustStock) — les
+      // deux issues sont correctes et dépendent du timing réel d'exécution de deux requêtes
+      // HTTP concurrentes, pas d'un choix applicatif : SaleService.validate() ne retente
+      // jamais un décrément (S25, contrairement à PurchaseService.validate()), donc quel que
+      // soit le code d'erreur du perdant, l'invariant qui compte est vérifié plus bas — un
+      // seul mouvement de stock, jamais négatif, jamais de double COMPLETED.
       const statuses = [res1.status, res2.status].sort((a, b) => a - b);
-      expect(statuses).toEqual([200, 409]);
+      expect(statuses[0]).toBe(200);
+      expect([400, 409]).toContain(statuses[1]);
 
       const pw = await prisma.productWarehouse.findUnique({ where: { id: pwValId } });
       expect(new Decimal(pw!.quantity).toString()).toBe('0');
