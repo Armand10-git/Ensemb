@@ -17,6 +17,7 @@ const PW_ID     = 'pw000001-0000-0000-0000-000000000001';
 const REF       = 'VTE-2026-000001';
 const CASH_SESSION_ID  = 'cs000001-0000-0000-0000-000000000001';
 const CASH_SESSION_REF = 'CS-2026-000001';
+const PAYMENT_SALE_ID  = 'pmts0001-0000-0000-0000-000000000001';
 
 function makeCreatedSale(overrides: Record<string, unknown> = {}) {
   return {
@@ -70,12 +71,13 @@ describe('PosService', () => {
     unit: { findMany: jest.Mock };
     productWarehouse: { findFirst: jest.Mock };
     sale: { create: jest.Mock; findUniqueOrThrow: jest.Mock };
+    paymentWithCreditCard: { create: jest.Mock };
     $transaction: jest.Mock;
   };
 
   let productWarehouseService: { adjustStock: jest.Mock };
   let paymentSaleService: { createInTransaction: jest.Mock };
-  let aggregator: { generatePaymentLink: jest.Mock; verifyWebhookSignature: jest.Mock };
+  let asyncPaymentService: { generatePaymentLinkFor: jest.Mock };
   let cashSessionService: { findOpenSessionInTransaction: jest.Mock };
   let config: { get: jest.Mock };
   let queue: { add: jest.Mock };
@@ -90,6 +92,7 @@ describe('PosService', () => {
       unit: { findMany: jest.fn() },
       productWarehouse: { findFirst: jest.fn() },
       sale: { create: jest.fn(), findUniqueOrThrow: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+      paymentWithCreditCard: { create: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn(),
     };
 
@@ -104,10 +107,11 @@ describe('PosService', () => {
     const rtMock = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const pwMock = { adjustStock: jest.fn() };
     const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
-    const paymentMock = { createInTransaction: jest.fn().mockResolvedValue({}) };
-    const aggregatorMock = {
-      generatePaymentLink: jest.fn().mockResolvedValue('https://pay.test/mock-123'),
-      verifyWebhookSignature: jest.fn().mockReturnValue(true),
+    const paymentMock = {
+      createInTransaction: jest.fn().mockResolvedValue({ id: PAYMENT_SALE_ID }),
+    };
+    const asyncPaymentServiceMock = {
+      generatePaymentLinkFor: jest.fn().mockResolvedValue('https://pay.test/mock-123'),
     };
     const configMock = { get: jest.fn().mockReturnValue(undefined) };
     const queueMock = { add: jest.fn().mockResolvedValue(undefined) };
@@ -127,7 +131,7 @@ describe('PosService', () => {
       pwMock as never,
       notifMock as never,
       paymentMock as never,
-      aggregatorMock as never,
+      asyncPaymentServiceMock as never,
       cashSessionMock as never,
       configMock as never,
       queueMock as never,
@@ -135,7 +139,7 @@ describe('PosService', () => {
     prisma = prismaMock;
     productWarehouseService = pwMock;
     paymentSaleService = paymentMock;
-    aggregator = aggregatorMock;
+    asyncPaymentService = asyncPaymentServiceMock;
     cashSessionService = cashSessionMock;
     config = configMock;
     queue = queueMock;
@@ -318,90 +322,101 @@ describe('PosService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(paymentSaleService.createInTransaction).not.toHaveBeenCalled();
     });
-
-    it('CARD : change toujours à 0, amount = grandTotal exact', async () => {
-      mockOwnershipOk();
-      mockStockOk('10', '8');
-      prisma.sale.create.mockResolvedValue(makeCreatedSale({ grandTotal: new Decimal('2000') }));
-      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeCreatedSale({ grandTotal: new Decimal('2000') }));
-
-      await service.createSale(ORG_A, USER_ID, baseDto({ paymentMethod: 'CARD', amountReceived: undefined }));
-
-      expect(paymentSaleService.createInTransaction).toHaveBeenCalledWith(
-        expect.anything(),
-        ORG_A,
-        USER_ID,
-        SALE_ID,
-        expect.objectContaining({ amount: '2000', method: 'CARD', change: '0' }),
-      );
-    });
   });
 
-  // ─── createSale — MOBILE_MONEY ───────────────────────────────────────────────
+  // ─── createSale — CARD / MOBILE_MONEY (paiement asynchrone, S31) ────────────
 
-  describe('createSale — MOBILE_MONEY', () => {
-    it('status AWAITING_PAYMENT, aucun PaymentSale créé, lien généré, job enfilé', async () => {
-      mockOwnershipOk();
-      mockStockOk('10', '8');
-      prisma.sale.create.mockResolvedValue(makeCreatedSale({ status: 'AWAITING_PAYMENT', grandTotal: new Decimal('2000') }));
-      prisma.sale.findUniqueOrThrow.mockResolvedValue(
-        makeCreatedSale({ status: 'AWAITING_PAYMENT', grandTotal: new Decimal('2000') }),
-      );
+  describe.each(['CARD', 'MOBILE_MONEY'] as const)(
+    'createSale — %s (paiement asynchrone)',
+    (paymentMethod) => {
+      it('status AWAITING_PAYMENT, aucun PaymentSale créé, lien généré, job enfilé', async () => {
+        mockOwnershipOk();
+        mockStockOk('10', '8');
+        prisma.sale.create.mockResolvedValue(
+          makeCreatedSale({ status: 'AWAITING_PAYMENT', grandTotal: new Decimal('2000') }),
+        );
+        prisma.sale.findUniqueOrThrow.mockResolvedValue(
+          makeCreatedSale({ status: 'AWAITING_PAYMENT', grandTotal: new Decimal('2000') }),
+        );
 
-      const result = await service.createSale(
-        ORG_A,
-        USER_ID,
-        baseDto({ paymentMethod: 'MOBILE_MONEY', amountReceived: undefined }),
-      );
+        const result = await service.createSale(
+          ORG_A,
+          USER_ID,
+          baseDto({ paymentMethod, amountReceived: undefined }),
+        );
 
-      expect(paymentSaleService.createInTransaction).not.toHaveBeenCalled();
-      const createArgs = prisma.sale.create.mock.calls[0][0] as { data: { status: string } };
-      expect(createArgs.data.status).toBe('AWAITING_PAYMENT');
+        expect(paymentSaleService.createInTransaction).not.toHaveBeenCalled();
+        const createArgs = prisma.sale.create.mock.calls[0][0] as { data: { status: string } };
+        expect(createArgs.data.status).toBe('AWAITING_PAYMENT');
 
-      expect(aggregator.generatePaymentLink).toHaveBeenCalledWith(
-        expect.objectContaining({ reference: SALE_ID }),
-      );
-      expect(queue.add).toHaveBeenCalledWith(
-        'pos.expirePayment',
-        { saleId: SALE_ID, organizationId: ORG_A },
-        expect.objectContaining({ delay: 180_000 }),
-      );
-      expect(result.paymentLink).toBe('https://pay.test/mock-123');
-    });
+        expect(asyncPaymentService.generatePaymentLinkFor).toHaveBeenCalledWith(
+          ORG_A,
+          expect.objectContaining({
+            amount: expect.any(Decimal),
+            currency: 'XAF',
+            reference: SALE_ID,
+            callbackPath: ORG_A,
+          }),
+        );
+        expect(queue.add).toHaveBeenCalledWith(
+          'pos.expirePayment',
+          { saleId: SALE_ID, organizationId: ORG_A },
+          expect.objectContaining({ delay: 180_000 }),
+        );
+        expect(result.paymentLink).toBe('https://pay.test/mock-123');
+      });
 
-    it('utilise POS_PAYMENT_TIMEOUT_MS depuis la config si défini', async () => {
-      config.get.mockImplementation((key: string) => (key === 'POS_PAYMENT_TIMEOUT_MS' ? '60000' : undefined));
-      mockOwnershipOk();
-      mockStockOk('10', '8');
-      prisma.sale.create.mockResolvedValue(makeCreatedSale({ status: 'AWAITING_PAYMENT' }));
-      prisma.sale.findUniqueOrThrow.mockResolvedValue(makeCreatedSale({ status: 'AWAITING_PAYMENT' }));
+      it('utilise POS_PAYMENT_TIMEOUT_MS depuis la config si défini', async () => {
+        config.get.mockImplementation((key: string) => (key === 'POS_PAYMENT_TIMEOUT_MS' ? '60000' : undefined));
+        mockOwnershipOk();
+        mockStockOk('10', '8');
+        prisma.sale.create.mockResolvedValue(makeCreatedSale({ status: 'AWAITING_PAYMENT' }));
+        prisma.sale.findUniqueOrThrow.mockResolvedValue(makeCreatedSale({ status: 'AWAITING_PAYMENT' }));
 
-      await service.createSale(ORG_A, USER_ID, baseDto({ paymentMethod: 'MOBILE_MONEY', amountReceived: undefined }));
+        await service.createSale(ORG_A, USER_ID, baseDto({ paymentMethod, amountReceived: undefined }));
 
-      expect(queue.add).toHaveBeenCalledWith(
-        'pos.expirePayment',
-        expect.anything(),
-        expect.objectContaining({ delay: 60_000 }),
-      );
-    });
-  });
+        expect(queue.add).toHaveBeenCalledWith(
+          'pos.expirePayment',
+          expect.anything(),
+          expect.objectContaining({ delay: 60_000 }),
+        );
+      });
+    },
+  );
 
-  // ─── confirmMobileMoneyPayment ───────────────────────────────────────────────
+  // ─── confirmAsyncPayment ──────────────────────────────────────────────────────
 
-  describe('confirmMobileMoneyPayment', () => {
-    it('AWAITING_PAYMENT → COMPLETED + PaymentSale créé', async () => {
+  const MOMO_CONFIRMATION = {
+    provider: 'ORANGE_MONEY' as const,
+    providerCustomerId: 'orange-cust-001',
+    providerTransactionId: 'orange-txn-001',
+  };
+  const CARD_CONFIRMATION = {
+    provider: 'CARD' as const,
+    providerCustomerId: 'card-cust-001',
+    providerTransactionId: 'card-txn-001',
+  };
+
+  describe('confirmAsyncPayment', () => {
+    function mockAwaitingSale() {
       const saleFindUnique = jest.fn().mockResolvedValue({
         organizationId: ORG_A,
         status: 'AWAITING_PAYMENT',
         grandTotal: new Decimal('2000'),
         date: new Date('2026-07-27'),
         userId: USER_ID,
+        clientId: CLIENT_ID,
       });
       const saleUpdate = jest.fn().mockResolvedValue({});
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.findUnique = saleFindUnique;
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.update = saleUpdate;
+      return { saleFindUnique, saleUpdate };
+    }
 
-      await service.confirmMobileMoneyPayment(ORG_A, SALE_ID);
+    it('MOBILE_MONEY (ORANGE_MONEY) : AWAITING_PAYMENT → COMPLETED, PaymentSale method MOBILE_MONEY, PaymentWithCreditCard créé', async () => {
+      const { saleUpdate } = mockAwaitingSale();
+
+      await service.confirmAsyncPayment(ORG_A, SALE_ID, MOMO_CONFIRMATION);
 
       expect(saleUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: SALE_ID }, data: { status: 'COMPLETED' } }),
@@ -411,26 +426,62 @@ describe('PosService', () => {
         ORG_A,
         USER_ID,
         SALE_ID,
-        expect.objectContaining({ method: 'MOBILE_MONEY', amount: '2000' }),
+        expect.objectContaining({ method: 'MOBILE_MONEY', amount: '2000', change: '0' }),
       );
+      expect(prisma.paymentWithCreditCard.create).toHaveBeenCalledWith({
+        data: {
+          paymentSaleId: PAYMENT_SALE_ID,
+          organizationId: ORG_A,
+          customerId: CLIENT_ID,
+          provider: 'ORANGE_MONEY',
+          providerCustomerId: 'orange-cust-001',
+          providerTransactionId: 'orange-txn-001',
+        },
+      });
     });
 
-    it('vente déjà COMPLETED → no-op idempotent (pas de double PaymentSale)', async () => {
+    it('CARD : PaymentSale créé avec method CARD (dérivé du provider, pas du dto d\'origine)', async () => {
+      mockAwaitingSale();
+
+      await service.confirmAsyncPayment(ORG_A, SALE_ID, CARD_CONFIRMATION);
+
+      expect(paymentSaleService.createInTransaction).toHaveBeenCalledWith(
+        expect.anything(),
+        ORG_A,
+        USER_ID,
+        SALE_ID,
+        expect.objectContaining({ method: 'CARD', amount: '2000', change: '0' }),
+      );
+      expect(prisma.paymentWithCreditCard.create).toHaveBeenCalledWith({
+        data: {
+          paymentSaleId: PAYMENT_SALE_ID,
+          organizationId: ORG_A,
+          customerId: CLIENT_ID,
+          provider: 'CARD',
+          providerCustomerId: 'card-cust-001',
+          providerTransactionId: 'card-txn-001',
+        },
+      });
+    });
+
+    it('vente déjà COMPLETED → no-op idempotent (pas de double PaymentSale/PaymentWithCreditCard)', async () => {
       const saleFindUnique = jest.fn().mockResolvedValue({
         organizationId: ORG_A,
         status: 'COMPLETED',
         grandTotal: new Decimal('2000'),
         date: new Date('2026-07-27'),
         userId: USER_ID,
+        clientId: CLIENT_ID,
       });
       const saleUpdate = jest.fn();
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.findUnique = saleFindUnique;
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.update = saleUpdate;
 
-      await service.confirmMobileMoneyPayment(ORG_A, SALE_ID);
+      await service.confirmAsyncPayment(ORG_A, SALE_ID, MOMO_CONFIRMATION);
 
       expect(saleUpdate).not.toHaveBeenCalled();
       expect(paymentSaleService.createInTransaction).not.toHaveBeenCalled();
+      expect(prisma.paymentWithCreditCard.create).not.toHaveBeenCalled();
     });
 
     it("vente d'une autre organisation → no-op (jamais d'exception, jamais de fuite cross-tenant)", async () => {
@@ -440,13 +491,15 @@ describe('PosService', () => {
         grandTotal: new Decimal('2000'),
         date: new Date('2026-07-27'),
         userId: USER_ID,
+        clientId: CLIENT_ID,
       });
       const saleUpdate = jest.fn();
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.findUnique = saleFindUnique;
       (prisma as unknown as { sale: { findUnique: jest.Mock; update: jest.Mock } }).sale.update = saleUpdate;
 
-      await expect(service.confirmMobileMoneyPayment(ORG_A, SALE_ID)).resolves.toBeUndefined();
+      await expect(service.confirmAsyncPayment(ORG_A, SALE_ID, MOMO_CONFIRMATION)).resolves.toBeUndefined();
       expect(saleUpdate).not.toHaveBeenCalled();
+      expect(prisma.paymentWithCreditCard.create).not.toHaveBeenCalled();
     });
   });
 

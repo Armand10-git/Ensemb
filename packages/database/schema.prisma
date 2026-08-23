@@ -152,6 +152,10 @@ model WebhookEvent {
   /// Vente POS concernée — résolu depuis le payload de l'agrégateur (S22, parallèle à invoiceId)
   saleId          String?   @db.Uuid
   sale            Sale?     @relation(fields: [saleId], references: [id])
+  /// Intention de paiement en ligne (vente classique) concernée — résolu depuis le payload de
+  /// l'agrégateur (S31, même patron de FK nullable en parallèle que saleId/invoiceId)
+  onlinePaymentIntentId String?              @db.Uuid
+  onlinePaymentIntent   OnlinePaymentIntent? @relation(fields: [onlinePaymentIntentId], references: [id])
 
   @@unique([provider, providerEventId])
   @@map("webhook_events")
@@ -194,6 +198,7 @@ model Organization {
   subscription     Subscription?
   invoices         Invoice[]
   smtpServer       SmtpServer?
+  paymentGatewayCredential PaymentGatewayCredential?
   backupExports    BackupExport[]
   warehouses       Warehouse[]
   categories       Category[]
@@ -217,6 +222,8 @@ model Organization {
   quotations       Quotation[]
   expenseCategories ExpenseCategory[]
   expenses          Expense[]
+  onlinePaymentIntents     OnlinePaymentIntent[]
+  paymentWithCreditCards   PaymentWithCreditCard[]
 
   @@map("organizations")
 }
@@ -238,6 +245,37 @@ model SmtpServer {
   updatedAt      DateTime     @updatedAt
 
   @@map("smtp_servers")
+}
+
+/// Moyen de paiement en ligne réellement utilisé par le client sur la page hébergée de
+/// l'agrégateur (S31). Distinct de PaymentMethod (moyens d'encaissement POS/hors-POS S20).
+enum PaymentProvider {
+  CARD
+  ORANGE_MONEY
+  MTN_MOMO
+}
+
+/// Identifiants d'agrégateur de paiement PAR ORGANISATION (S31, §17 point S) — distinct des
+/// identifiants plateforme de PaymentAggregatorService (T07). UN SEUL compte agrégateur par
+/// organisation (pas de champ provider ici) : un agrégateur type CinetPay/Monetbil route
+/// CARD/Orange Money/MTN MoMo via un seul compte marchand — le provider réellement utilisé
+/// n'est connu qu'au retour du webhook (le client choisit son moyen sur la page hébergée de
+/// l'agrégateur), voir PaymentWithCreditCard.provider.
+model PaymentGatewayCredential {
+  id                  String   @id @default(uuid()) @db.Uuid
+  organizationId      String   @unique @db.Uuid
+  /// Chiffré en AES-256-GCM — format stocké : "iv:authTag:ciphertext" (hex)
+  apiKeyCipher        String
+  merchantId          String?
+  /// Chiffré en AES-256-GCM — format stocké : "iv:authTag:ciphertext" (hex)
+  webhookSecretCipher String
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("payment_gateway_credentials")
 }
 
 /// Compte staff plateforme — auth séparée de celle des utilisateurs tenant.
@@ -644,6 +682,7 @@ model Client {
   organization   Organization @relation(fields: [organizationId], references: [id])
   sales          Sale[]
   quotations     Quotation[]
+  paymentWithCreditCards PaymentWithCreditCard[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -942,6 +981,7 @@ model Sale {
   payments      PaymentSale[]
   webhookEvents WebhookEvent[]
   saleReturns   SaleReturn[]
+  onlinePaymentIntents OnlinePaymentIntent[]
 
   @@unique([organizationId, reference])
   @@index([organizationId, status])
@@ -1022,8 +1062,75 @@ model PaymentSale {
   organization Organization @relation(fields: [organizationId], references: [id])
   user         User         @relation(fields: [userId], references: [id])
 
+  paymentWithCreditCard PaymentWithCreditCard?
+  onlinePaymentIntent   OnlinePaymentIntent?
+
   @@index([organizationId, saleId])
   @@map("payment_sales")
+}
+
+/// Avancement d'une intention de paiement en ligne (S31, §17 point V) — distinct de
+/// Sale.status : une vente classique décrémente son stock à validate() (S21), totalement
+/// découplée de l'encaissement (S20/S31) ; il n'y a donc rien à restituer côté stock si un
+/// paiement en ligne échoue ou expire, contrairement au POS où le stock est réservé dès la
+/// création de la vente. PENDING → CONFIRMED (webhook, PaymentSale créé) ou PENDING → EXPIRED
+/// (job d'expiration, aucun effet de bord).
+enum OnlinePaymentIntentStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+}
+
+/// Intention de paiement en ligne (CARD/ORANGE_MONEY/MTN_MOMO) sur une vente classique (S31).
+/// Aucun PaymentSale n'est créé tant que le webhook n'a pas confirmé — Sale.status n'est
+/// JAMAIS modifié par ce flux (une vente COMPLETED reste immuable, §17 règle 7 ; une vente
+/// PENDING n'est pas non plus affectée : le paiement est indépendant de la validation).
+model OnlinePaymentIntent {
+  id             String                    @id @default(uuid()) @db.Uuid
+  organizationId String                    @db.Uuid
+  saleId         String                    @db.Uuid
+  /// Montant demandé — Decimal obligatoire (§17 point A), jamais recalculé après création
+  amount         Decimal                   @db.Decimal(14, 3)
+  status         OnlinePaymentIntentStatus @default(PENDING)
+  /// Posé uniquement à la confirmation — un seul PaymentSale par intention
+  paymentSaleId  String?                   @unique @db.Uuid
+  expiresAt      DateTime
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+  paymentSale  PaymentSale? @relation(fields: [paymentSaleId], references: [id])
+
+  webhookEvents WebhookEvent[]
+
+  @@index([organizationId, saleId])
+  @@map("online_payment_intents")
+}
+
+/// Mapping paiement carte/mobile money ↔ compte client chez l'agrégateur (S31, squelette de
+/// référence docs/roadmap/01-architecture.md §0). Créé UNIQUEMENT à la confirmation webhook
+/// (POS ou vente classique), jamais à l'initiation — providerCustomerId/providerTransactionId
+/// proviennent du payload webhook, jamais saisis par le client. organizationId dénormalisé
+/// depuis paymentSale.organizationId (anti-join sur chaque contrôle IDOR, patron PaymentSale S20).
+model PaymentWithCreditCard {
+  id                    String          @id @default(uuid()) @db.Uuid
+  paymentSaleId         String          @unique @db.Uuid
+  organizationId        String          @db.Uuid
+  customerId            String          @db.Uuid
+  /// Moyen réellement utilisé, rapporté par l'agrégateur au webhook — jamais choisi par le
+  /// client à l'initiation (un seul compte agrégateur par organisation, §17 point S)
+  provider              PaymentProvider
+  providerCustomerId    String
+  providerTransactionId String
+  createdAt             DateTime        @default(now())
+
+  paymentSale  PaymentSale  @relation(fields: [paymentSaleId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Client       @relation(fields: [customerId], references: [id])
+
+  @@index([organizationId])
+  @@map("payment_with_credit_card")
 }
 
 // ─── Devis (S28, §18.4) ───────────────────────────────────────────────────────

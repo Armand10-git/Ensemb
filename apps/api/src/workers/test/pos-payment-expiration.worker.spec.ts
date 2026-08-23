@@ -9,28 +9,29 @@ function makeJob(data: { saleId?: string; organizationId?: string }, name = 'pos
 }
 
 describe('PosPaymentExpirationWorker', () => {
-  let saleService: { cancel: jest.Mock };
+  let saleService: { expireAwaitingPayment: jest.Mock };
   let auditService: { create: jest.Mock };
   let worker: PosPaymentExpirationWorker;
 
   beforeEach(() => {
-    saleService = { cancel: jest.fn() };
+    saleService = { expireAwaitingPayment: jest.fn() };
     auditService = { create: jest.fn().mockResolvedValue(undefined) };
     worker = new PosPaymentExpirationWorker(saleService as never, auditService as never);
   });
 
-  it('AWAITING_PAYMENT et délai écoulé → appelle SaleService.cancel() avec actorId null, journalise AuditLog SYSTEM', async () => {
-    saleService.cancel.mockResolvedValue({
+  it('AWAITING_PAYMENT et délai écoulé → appelle SaleService.expireAwaitingPayment(), journalise AuditLog SYSTEM', async () => {
+    saleService.expireAwaitingPayment.mockResolvedValue({
       status: 'CANCELLED',
       cancelReason: 'Expiration du délai de paiement mobile money',
     });
 
     await worker.process(makeJob({ saleId: SALE_ID, organizationId: ORG_ID }));
 
-    expect(saleService.cancel).toHaveBeenCalledWith(SALE_ID, ORG_ID, {
-      reason: 'Expiration du délai de paiement mobile money',
-      actorId: null,
-    });
+    expect(saleService.expireAwaitingPayment).toHaveBeenCalledWith(
+      SALE_ID,
+      ORG_ID,
+      'Expiration du délai de paiement mobile money',
+    );
     expect(auditService.create).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: ORG_ID,
@@ -44,7 +45,9 @@ describe('PosPaymentExpirationWorker', () => {
   });
 
   it('vente déjà résolue (COMPLETED/CANCELLED, BadRequestException) → no-op, pas de relance', async () => {
-    saleService.cancel.mockRejectedValue(new BadRequestException('Seule une vente validée...'));
+    saleService.expireAwaitingPayment.mockRejectedValue(
+      new BadRequestException('Seule une vente en attente de paiement (AWAITING_PAYMENT) peut expirer.'),
+    );
 
     await expect(
       worker.process(makeJob({ saleId: SALE_ID, organizationId: ORG_ID })),
@@ -53,22 +56,22 @@ describe('PosPaymentExpirationWorker', () => {
   });
 
   it('conflit de concurrence (ConflictException) → relance l\'erreur pour retry BullMQ', async () => {
-    saleService.cancel.mockRejectedValue(new ConflictException('Conflit de version'));
+    saleService.expireAwaitingPayment.mockRejectedValue(new ConflictException('Conflit de version'));
 
     await expect(
       worker.process(makeJob({ saleId: SALE_ID, organizationId: ORG_ID })),
     ).rejects.toThrow(ConflictException);
   });
 
-  it('job sans saleId/organizationId → ignoré sans appeler cancel()', async () => {
+  it('job sans saleId/organizationId → ignoré sans appeler expireAwaitingPayment()', async () => {
     await worker.process(makeJob({}));
 
-    expect(saleService.cancel).not.toHaveBeenCalled();
+    expect(saleService.expireAwaitingPayment).not.toHaveBeenCalled();
   });
 
   it('nom de job inconnu → ignoré', async () => {
     await worker.process(makeJob({ saleId: SALE_ID, organizationId: ORG_ID }, 'other.job'));
 
-    expect(saleService.cancel).not.toHaveBeenCalled();
+    expect(saleService.expireAwaitingPayment).not.toHaveBeenCalled();
   });
 });

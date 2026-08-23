@@ -9,12 +9,14 @@ import { SalesModule } from '../modules/sales/sale.module';
 import { QuotationsModule } from '../modules/quotations/quotation.module';
 import { AuditModule } from '../modules/audit/audit.module';
 import { PosPaymentExpirationQueueModule } from '../modules/pos/pos-payment-expiration-queue.module';
+import { SaleOnlinePaymentExpirationQueueModule } from '../modules/sales/sale-online-payment-expiration-queue.module';
 import { MessagingModule } from '../modules/messaging/messaging.module';
 import { MessagingQueueModule } from '../modules/messaging/messaging-queue.module';
 import { BillingWorker } from './billing.worker';
 import { BackupWorker } from './backup.worker';
 import { ExcelWorker } from './excel.worker';
 import { PosPaymentExpirationWorker } from './pos-payment-expiration.worker';
+import { SaleOnlinePaymentExpirationWorker } from './sale-online-payment-expiration.worker';
 import { SaleEmailWorker } from './sale-email.worker';
 import { SaleSmsWorker } from './sale-sms.worker';
 import { QuotationEmailWorker } from './quotation-email.worker';
@@ -48,6 +50,7 @@ import { QuotationSmsWorker } from './quotation-sms.worker';
     PartnersModule,
     RealtimeModule,
     // SalesModule exporte SaleService (PosPaymentExpirationWorker réutilise cancel(), S21b/S22)
+    // et SaleOnlinePaymentService (SaleOnlinePaymentExpirationWorker, S31)
     SalesModule,
     // QuotationsModule exporte QuotationService (nécessaire pour QuotationEmailWorker/QuotationSmsWorker)
     QuotationsModule,
@@ -56,6 +59,9 @@ import { QuotationSmsWorker } from './quotation-sms.worker';
     // Enregistre la file 'pos-payment-expiration' (nécessaire pour @Processor('pos-payment-expiration')) —
     // module dédié plutôt que PosModule entier, pour éviter d'entraîner sa dépendance croisée vers BillingModule
     PosPaymentExpirationQueueModule,
+    // Enregistre la file 'sale-online-payment-expiration' (nécessaire pour
+    // @Processor('sale-online-payment-expiration')) — même patron que PosPaymentExpirationQueueModule (S31)
+    SaleOnlinePaymentExpirationQueueModule,
     // MessagingModule exporte EmailService et SmsService (S24, SaleEmailWorker/SaleSmsWorker)
     MessagingModule,
     // Enregistre les files 'email' et 'sms' (nécessaire pour @Processor('email')/@Processor('sms')) —
@@ -67,6 +73,7 @@ import { QuotationSmsWorker } from './quotation-sms.worker';
     BackupWorker,
     ExcelWorker,
     PosPaymentExpirationWorker,
+    SaleOnlinePaymentExpirationWorker,
     SaleEmailWorker,
     SaleSmsWorker,
     QuotationEmailWorker,

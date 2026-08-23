@@ -21,7 +21,9 @@ import {
 } from '../inventory/product-warehouse.service';
 import { NotificationService } from '../notifications/notification.service';
 import { PaymentSaleService } from '../sales/payment-sale.service';
-import { PaymentAggregatorService } from '../billing/payment-aggregator.service';
+import { AsyncPaymentService } from '../payment-gateway/async-payment.service';
+import type { AggregatorPaymentConfirmation } from '../payment-gateway/payment-provider.util';
+import { mapProviderToPaymentMethod } from '../payment-gateway/payment-provider.util';
 import { CashSessionService } from '../cash-sessions/cash-session.service';
 import type { SaleResponse } from '../sales/sale.service';
 import type { CalculateTotalDto, CreatePosSaleDto, PosLineDto } from './dto/pos-sale.dto';
@@ -73,7 +75,7 @@ interface StockUpdate {
 }
 
 export interface PosSaleResponse extends SaleResponse {
-  /** Lien de paiement mobile money — présent uniquement si paymentMethod === MOBILE_MONEY. */
+  /** Lien de paiement agrégateur — présent uniquement si paymentMethod === CARD ou MOBILE_MONEY. */
   paymentLink?: string;
 }
 
@@ -129,11 +131,12 @@ const DETAIL_SELECT = {
  *    depuis un total envoyé par le client, à la fois pour la prévisualisation
  *    (calculate-total) et pour la création réelle (createSale), qui appellent
  *    exactement la même formule (§18.2 étape 6 — recalcul indépendant du client).
- *  - CASH/CARD : PaymentSale créé immédiatement via PaymentSaleService.createInTransaction
+ *  - CASH : PaymentSale créé immédiatement via PaymentSaleService.createInTransaction
  *    (réutilisé, pas de duplication du calcul paidAmount/paymentStatus), status COMPLETED.
- *  - MOBILE_MONEY : status AWAITING_PAYMENT, stock déjà décrémenté (réservé), aucun
- *    PaymentSale créé — lien de paiement généré après la transaction, job d'expiration
- *    différé enfilé (queue pos-payment-expiration, §17 point V).
+ *  - CARD/MOBILE_MONEY : status AWAITING_PAYMENT, stock déjà décrémenté (réservé), aucun
+ *    PaymentSale créé — une transaction carte réelle (3-D Secure…) comme un paiement mobile
+ *    money ne sont jamais instantanés (S31) — lien de paiement généré après la transaction,
+ *    job d'expiration différé enfilé (queue pos-payment-expiration, §17 point V).
  *  - Session de caisse obligatoire (S23b) : createSale() exige une session CashSession OPEN
  *    pour (organizationId, userId, dto.warehouseId) — vérifiée et rattachée (cashSessionId)
  *    DANS la même transaction Serializable que la création de la vente, via
@@ -151,7 +154,7 @@ export class PosService {
     private readonly productWarehouseService: ProductWarehouseService,
     private readonly notificationService: NotificationService,
     private readonly paymentSaleService: PaymentSaleService,
-    private readonly aggregator: PaymentAggregatorService,
+    private readonly asyncPaymentService: AsyncPaymentService,
     private readonly cashSessionService: CashSessionService,
     private readonly config: ConfigService,
     @InjectQueue('pos-payment-expiration')
@@ -230,9 +233,11 @@ export class PosService {
    * POST /pos/sales — crée une vente POS en une seule transaction Serializable : recalcule
    * le total serveur (ignore tout total envoyé par le client), vérifie et décrémente le stock
    * sous verrouillage optimiste, crée Sale (isPos: true) + SaleDetail[], puis :
-   *  - CASH/CARD : encaisse immédiatement (PaymentSale, status COMPLETED)
-   *  - MOBILE_MONEY : status AWAITING_PAYMENT, lien de paiement généré et job d'expiration
-   *    enfilé APRÈS le commit (pas d'appel réseau à l'intérieur de la transaction).
+   *  - CASH : encaisse immédiatement (PaymentSale, status COMPLETED)
+   *  - CARD/MOBILE_MONEY : status AWAITING_PAYMENT, lien de paiement généré et job d'expiration
+   *    enfilé APRÈS le commit (pas d'appel réseau à l'intérieur de la transaction) — une
+   *    transaction carte réelle n'est jamais instantanée (3-D Secure…), même flux asynchrone
+   *    que mobile money (S31).
    *
    * Exige une session de caisse OPEN (§18.2, S23b) pour (organizationId, userId,
    * dto.warehouseId) : recherchée via CashSessionService.findOpenSessionInTransaction juste
@@ -288,7 +293,7 @@ export class PosService {
           );
 
           const status: DocumentStatus =
-            dto.paymentMethod === 'MOBILE_MONEY' ? 'AWAITING_PAYMENT' : 'COMPLETED';
+            dto.paymentMethod !== 'CASH' ? 'AWAITING_PAYMENT' : 'COMPLETED';
 
           const created = await tx.sale.create({
             data: {
@@ -314,11 +319,8 @@ export class PosService {
             select: { ...SALE_SELECT, details: { select: DETAIL_SELECT } },
           });
 
-          if (dto.paymentMethod === 'CASH' || dto.paymentMethod === 'CARD') {
-            const change =
-              dto.paymentMethod === 'CASH'
-                ? new Decimal(dto.amountReceived ?? '0').minus(totals.grandTotal)
-                : new Decimal(0);
+          if (dto.paymentMethod === 'CASH') {
+            const change = new Decimal(dto.amountReceived ?? '0').minus(totals.grandTotal);
 
             if (change.isNegative()) {
               throw new BadRequestException(
@@ -360,12 +362,14 @@ export class PosService {
       select: { ...SALE_SELECT, details: { select: DETAIL_SELECT } },
     });
 
-    if (dto.paymentMethod !== 'MOBILE_MONEY') {
+    if (dto.paymentMethod === 'CASH') {
       return fullSale;
     }
 
     // Appel réseau + enqueue APRÈS le commit — jamais à l'intérieur de la transaction.
-    const paymentLink = await this.generateMobileMoneyLink(organizationId, fullSale);
+    // CARD et MOBILE_MONEY suivent tous deux le flux asynchrone (S31) : ni l'un ni l'autre
+    // n'est un encaissement instantané côté agrégateur.
+    const paymentLink = await this.generateAsyncPaymentLink(organizationId, fullSale);
     const timeoutMs = Number(
       this.config.get<string>('POS_PAYMENT_TIMEOUT_MS') ?? DEFAULT_POS_PAYMENT_TIMEOUT_MS,
     );
@@ -379,38 +383,74 @@ export class PosService {
   }
 
   /**
-   * Confirme le paiement mobile money d'une vente POS (appelée par le webhook de
-   * l'agrégateur, idempotent via WebhookEvent en amont). Repasse la vente
-   * AWAITING_PAYMENT → COMPLETED et crée le PaymentSale correspondant — le stock,
-   * déjà décrémenté à la création, n'est PAS retouché.
+   * Confirme le paiement asynchrone (CARD ou MOBILE_MONEY) d'une vente POS — appelée par le
+   * contrôleur webhook de l'agrégateur (idempotent via WebhookEvent en amont), avec le moyen
+   * réellement utilisé rapporté par l'agrégateur (`confirmation.provider`), PAS le
+   * `dto.paymentMethod` d'origine choisi par le caissier. Repasse la vente AWAITING_PAYMENT →
+   * COMPLETED, crée le PaymentSale correspondant, puis le PaymentWithCreditCard associé (trace
+   * l'identité agrégateur — providerCustomerId/providerTransactionId) — le stock, déjà
+   * décrémenté à la création, n'est PAS retouché.
    *
    * No-op idempotent (jamais d'exception) si la vente n'est plus AWAITING_PAYMENT
    * (déjà expirée ou déjà confirmée) ou si elle n'appartient pas à l'organisation —
    * un webhook ne doit jamais faire échouer la réponse HTTP à l'agrégateur.
+   *
+   * @param organizationId Tenant propriétaire de la vente (jamais déduit du payload webhook).
+   * @param saleId UUID de la vente POS AWAITING_PAYMENT à confirmer.
+   * @param confirmation Provider réel + identifiants agrégateur rapportés par le webhook
+   *   (contrat partagé avec la vente classique, cf. payment-provider.util.ts).
    */
-  async confirmMobileMoneyPayment(organizationId: string, saleId: string): Promise<void> {
+  async confirmAsyncPayment(
+    organizationId: string,
+    saleId: string,
+    confirmation: AggregatorPaymentConfirmation,
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       const sale = await tx.sale.findUnique({
         where: { id: saleId },
-        select: { organizationId: true, status: true, grandTotal: true, date: true, userId: true },
+        select: {
+          organizationId: true,
+          status: true,
+          grandTotal: true,
+          date: true,
+          userId: true,
+          clientId: true,
+        },
       });
 
       if (!sale || sale.organizationId !== organizationId) {
-        this.logger.warn(`confirmMobileMoneyPayment : vente ${saleId} introuvable ou hors org — ignoré`);
+        this.logger.warn(`confirmAsyncPayment : vente ${saleId} introuvable ou hors org — ignoré`);
         return;
       }
       if (sale.status !== 'AWAITING_PAYMENT') {
-        this.logger.log(`confirmMobileMoneyPayment : vente ${saleId} déjà ${sale.status} — no-op idempotent`);
+        this.logger.log(`confirmAsyncPayment : vente ${saleId} déjà ${sale.status} — no-op idempotent`);
         return;
       }
 
       await tx.sale.update({ where: { id: saleId }, data: { status: 'COMPLETED' } });
 
-      await this.paymentSaleService.createInTransaction(tx, organizationId, sale.userId, saleId, {
-        date: sale.date.toISOString(),
-        amount: sale.grandTotal.toString(),
-        method: 'MOBILE_MONEY',
-        change: '0',
+      const paymentSale = await this.paymentSaleService.createInTransaction(
+        tx,
+        organizationId,
+        sale.userId,
+        saleId,
+        {
+          date: sale.date.toISOString(),
+          amount: sale.grandTotal.toString(),
+          method: mapProviderToPaymentMethod(confirmation.provider),
+          change: '0',
+        },
+      );
+
+      await tx.paymentWithCreditCard.create({
+        data: {
+          paymentSaleId: paymentSale.id,
+          organizationId,
+          customerId: sale.clientId,
+          provider: confirmation.provider,
+          providerCustomerId: confirmation.providerCustomerId,
+          providerTransactionId: confirmation.providerTransactionId,
+        },
       });
     });
 
@@ -420,21 +460,19 @@ export class PosService {
   // ─── Helpers privés ──────────────────────────────────────────────────────────
 
   /**
-   * Génère le lien de paiement mobile money via PaymentAggregatorService (réutilisé tel
-   * quel, pas de duplication HMAC/appel réseau) — la référence transmise est l'UUID de la
-   * vente : le webhook de l'agrégateur (handlePosPaymentWebhook) l'échote sous le champ
-   * `saleId` du payload pour résoudre la vente sans ambiguïté (même patron que
-   * BillingService/invoiceId).
+   * Génère le lien de paiement asynchrone (CARD ou MOBILE_MONEY) via AsyncPaymentService
+   * (réutilisé tel quel, pas de duplication de la construction de l'URL de callback/appel
+   * réseau) — la référence transmise est l'UUID de la vente : le webhook de l'agrégateur
+   * (handlePosPaymentWebhook) l'échote sous le champ `saleId` du payload pour résoudre la
+   * vente sans ambiguïté (même patron que BillingService/invoiceId). Le segment de callback
+   * est l'organizationId — même route `/webhooks/payments/:organizationId` qu'auparavant.
    */
-  private async generateMobileMoneyLink(organizationId: string, sale: SaleResponse): Promise<string> {
-    const base =
-      this.config.get<string>('POS_PAYMENT_CALLBACK_BASE_URL') ??
-      'http://localhost:3000/api/v1/webhooks/payments';
-    return this.aggregator.generatePaymentLink({
+  private async generateAsyncPaymentLink(organizationId: string, sale: SaleResponse): Promise<string> {
+    return this.asyncPaymentService.generatePaymentLinkFor(organizationId, {
       amount: sale.grandTotal,
       currency: 'XAF',
       reference: sale.id,
-      callbackUrl: `${base}/${organizationId}`,
+      callbackPath: organizationId,
     });
   }
 
