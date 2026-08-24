@@ -15,6 +15,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ProductWarehouseService, OptimisticLockException } from '../inventory/product-warehouse.service';
+import { pdfJobName, type PdfJobData } from '../pdf/pdf-job.types';
 import type { CreatePurchaseDto, PurchaseDetailDto } from './dto/create-purchase.dto';
 import type { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -177,6 +178,9 @@ export class PurchaseService {
     private readonly emailQueue: Queue<{ organizationId: string; purchaseId: string; to: string }>,
     @InjectQueue('sms')
     private readonly smsQueue: Queue<{ organizationId: string; purchaseId: string; to: string }>,
+    // File BullMQ de génération PDF (S34) — mirror exact d'emailQueue/smsQueue.
+    @InjectQueue('pdf')
+    private readonly pdfQueue: Queue<PdfJobData>,
   ) {}
 
   /**
@@ -587,6 +591,42 @@ export class PurchaseService {
       throw new BadRequestException("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
     }
     await this.smsQueue.add('purchase.sendSms', { organizationId, purchaseId: id, to });
+    return { status: 'queued' };
+  }
+
+  /**
+   * Enfile la génération PDF de l'achat (S34) — mirror exact de SaleService.generatePdf.
+   *
+   * @param id - identifiant de l'achat à générer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param requestedBy - utilisateur ayant déclenché la génération (traçabilité uniquement).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé.
+   * @throws NotFoundException si l'achat est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si l'achat n'appartient pas à l'organisation.
+   */
+  async generatePdf(
+    id: string,
+    organizationId: string,
+    requestedBy: string,
+  ): Promise<{ status: 'queued' }> {
+    const purchase = await this.prisma.purchase.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, deletedAt: true },
+    });
+
+    if (!purchase || purchase.deletedAt !== null) {
+      throw new NotFoundException('Achat introuvable.');
+    }
+    if (purchase.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    await this.pdfQueue.add(pdfJobName('purchase'), {
+      organizationId,
+      documentType: 'purchase',
+      documentId: id,
+      requestedBy,
+    });
     return { status: 'queued' };
   }
 

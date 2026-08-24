@@ -37,15 +37,17 @@ export class StorageService {
   }
 
   /**
-   * Uploade un buffer re-encodé vers S3 et retourne la clé S3.
-   * @param key - chemin complet : "<orgId>/<type>/<uuid>.<ext>"
-   * @param buffer - contenu binaire déjà re-encodé par sharp
-   * @param mimeType - MIME type exact de l'image re-encodée
+   * Uploade un buffer vers S3 et retourne la clé S3.
+   * @param key - chemin complet : "<orgId>/<type>/<uuid ou id déterministe>.<ext>"
+   * @param buffer - contenu binaire déjà re-encodé par sharp (images) ou généré par
+   *   PdfService.render (PDF, S34) — aucune autre re-encodage nécessaire pour un PDF, le
+   *   risque visé par sharp (payload image exécutable déguisé) ne s'applique pas ici.
+   * @param mimeType - MIME type exact du contenu uploadé
    */
   async upload(
     key: string,
     buffer: Buffer,
-    mimeType: 'image/jpeg' | 'image/png' | 'image/webp',
+    mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf',
   ): Promise<string> {
     await this.client.send(
       new PutObjectCommand({

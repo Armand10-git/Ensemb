@@ -19,6 +19,9 @@ import { UploadsController } from './uploads.controller';
   imports: [ConfigModule],
   providers: [StorageService, UploadsService],
   controllers: [UploadsController],
-  exports: [UploadsService],
+  // StorageService exporté en plus d'UploadsService depuis S34 : PdfModule (worker) l'injecte
+  // directement pour uploader les PDF générés — réutilisation du client S3 unique existant,
+  // jamais un second client dupliqué (cf. PdfService.render()/PdfModule).
+  exports: [UploadsService, StorageService],
 })
 export class UploadsModule {}

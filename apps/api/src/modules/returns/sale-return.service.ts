@@ -18,6 +18,7 @@ import {
   ProductWarehouseService,
   OptimisticLockException,
 } from '../inventory/product-warehouse.service';
+import { pdfJobName, type PdfJobData } from '../pdf/pdf-job.types';
 import type { CreateSaleReturnDto, SaleReturnDetailDto } from './dto/create-sale-return.dto';
 import type { UpdateSaleReturnDto } from './dto/update-sale-return.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -193,6 +194,9 @@ export class SaleReturnService {
     private readonly emailQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
     @InjectQueue('sms')
     private readonly smsQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
+    // File BullMQ de génération PDF (S34) — mirror exact d'emailQueue/smsQueue.
+    @InjectQueue('pdf')
+    private readonly pdfQueue: Queue<PdfJobData>,
   ) {}
 
   /**
@@ -585,6 +589,42 @@ export class SaleReturnService {
       throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
     }
     await this.smsQueue.add('saleReturn.sendSms', { organizationId, returnId: id, to });
+    return { status: 'queued' };
+  }
+
+  /**
+   * Enfile la génération PDF du retour de vente (S34) — mirror exact de SaleService.generatePdf.
+   *
+   * @param id - identifiant du retour à générer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param requestedBy - utilisateur ayant déclenché la génération (traçabilité uniquement).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé.
+   * @throws NotFoundException si le retour est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si le retour n'appartient pas à l'organisation.
+   */
+  async generatePdf(
+    id: string,
+    organizationId: string,
+    requestedBy: string,
+  ): Promise<{ status: 'queued' }> {
+    const saleReturn = await this.prisma.saleReturn.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, deletedAt: true },
+    });
+
+    if (!saleReturn || saleReturn.deletedAt !== null) {
+      throw new NotFoundException('Retour de vente introuvable.');
+    }
+    if (saleReturn.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    await this.pdfQueue.add(pdfJobName('saleReturn'), {
+      organizationId,
+      documentType: 'saleReturn',
+      documentId: id,
+      requestedBy,
+    });
     return { status: 'queued' };
   }
 

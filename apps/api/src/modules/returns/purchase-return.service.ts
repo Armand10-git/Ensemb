@@ -16,6 +16,7 @@ import { DocumentCounterService } from '../../common/document-counter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ProductWarehouseService, OptimisticLockException } from '../inventory/product-warehouse.service';
 import { NotificationService } from '../notifications/notification.service';
+import { pdfJobName, type PdfJobData } from '../pdf/pdf-job.types';
 import type { CreatePurchaseReturnDto, PurchaseReturnDetailDto } from './dto/create-purchase-return.dto';
 import type { UpdatePurchaseReturnDto } from './dto/update-purchase-return.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -202,6 +203,9 @@ export class PurchaseReturnService {
     private readonly emailQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
     @InjectQueue('sms')
     private readonly smsQueue: Queue<{ organizationId: string; returnId: string; to: string }>,
+    // File BullMQ de génération PDF (S34) — mirror exact d'emailQueue/smsQueue.
+    @InjectQueue('pdf')
+    private readonly pdfQueue: Queue<PdfJobData>,
   ) {}
 
   /**
@@ -587,6 +591,42 @@ export class PurchaseReturnService {
       throw new BadRequestException("Ce fournisseur n'a pas de numéro de téléphone enregistré.");
     }
     await this.smsQueue.add('purchaseReturn.sendSms', { organizationId, returnId: id, to });
+    return { status: 'queued' };
+  }
+
+  /**
+   * Enfile la génération PDF du retour fournisseur (S34) — mirror exact de SaleService.generatePdf.
+   *
+   * @param id - identifiant du retour à générer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param requestedBy - utilisateur ayant déclenché la génération (traçabilité uniquement).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé.
+   * @throws NotFoundException si le retour est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si le retour n'appartient pas à l'organisation.
+   */
+  async generatePdf(
+    id: string,
+    organizationId: string,
+    requestedBy: string,
+  ): Promise<{ status: 'queued' }> {
+    const purchaseReturn = await this.prisma.purchaseReturn.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, deletedAt: true },
+    });
+
+    if (!purchaseReturn || purchaseReturn.deletedAt !== null) {
+      throw new NotFoundException('Retour fournisseur introuvable.');
+    }
+    if (purchaseReturn.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    await this.pdfQueue.add(pdfJobName('purchaseReturn'), {
+      organizationId,
+      documentType: 'purchaseReturn',
+      documentId: id,
+      requestedBy,
+    });
     return { status: 'queued' };
   }
 

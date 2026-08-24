@@ -53,6 +53,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   PATCH  /api/v1/purchase-returns/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/purchase-returns/:id/validate → 200 (PENDING → COMPLETED, décrémente le stock)
  *   POST   /api/v1/purchase-returns/:id/send    → 202 (S32/S33 — envoi asynchrone du récapitulatif par email/SMS)
+ *   POST   /api/v1/purchase-returns/:id/pdf     → 202 (S34 — génération PDF asynchrone, brandée)
  *   DELETE /api/v1/purchase-returns/:id         → 204 (PENDING uniquement)
  *
  * Pas de route /cancel dans cette session — mirror de purchases.cancel (S25, écart assumé).
@@ -195,6 +196,25 @@ export class PurchaseReturnController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.purchaseReturnService.send(id, req.user.organizationId, result.data.channel);
+  }
+
+  /**
+   * POST /api/v1/purchase-returns/:id/pdf
+   * Enfile la génération PDF brandée du retour fournisseur (S34, mirror exact de POST
+   * /sales/:id/pdf) — job BullMQ traité de façon asynchrone (202 Accepted). Le frontend
+   * écoute l'événement temps réel `pdf:ready` (org-scopé) pour récupérer l'URL signée.
+   *
+   * Réutilise la permission `purchaseReturns.view` plutôt qu'une nouvelle permission dédiée.
+   */
+  @RequirePermission('purchaseReturns.view')
+  @Post(':id/pdf')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'purchaseReturns.generatePdf', entity: 'PurchaseReturn' })
+  generatePdf(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.purchaseReturnService.generatePdf(id, req.user.organizationId, req.user.id);
   }
 
   /**

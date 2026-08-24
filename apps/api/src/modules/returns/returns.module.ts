@@ -4,6 +4,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationModule } from '../notifications/notification.module';
 import { MessagingQueueModule } from '../messaging/messaging-queue.module';
+import { PdfQueueModule } from '../pdf/pdf-queue.module';
 import { SaleReturnService } from './sale-return.service';
 import { SaleReturnController } from './sale-return.controller';
 import { PurchaseReturnService } from './purchase-return.service';
@@ -27,7 +28,14 @@ import { PaymentPurchaseReturnController } from './payment-purchase-return.contr
  * de retour de vente et de retour fournisseur).
  */
 @Module({
-  imports: [PrismaModule, RealtimeModule, InventoryModule, NotificationModule, MessagingQueueModule],
+  imports: [
+    PrismaModule,
+    RealtimeModule,
+    InventoryModule,
+    NotificationModule,
+    MessagingQueueModule,
+    PdfQueueModule,
+  ],
   controllers: [
     SaleReturnController,
     PurchaseReturnController,

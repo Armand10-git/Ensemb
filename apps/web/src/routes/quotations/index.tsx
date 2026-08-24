@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, FileText, Mail, MessageSquare, ArrowRightLeft } from 'lucide-react';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, FileText, Mail, MessageSquare, ArrowRightLeft, Download } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -98,10 +99,15 @@ interface DetailFormRow {
   taxAmount: string;
 }
 
+const VITE_API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
+const WS_URL = VITE_API_URL.replace('/api/v1', '');
+
 // ─── API Hooks ───────────────────────────────────────────────────────────────
-// (pas de socket.io ici : contrairement à une vente, aucune action sur un devis — création,
-// modification, conversion, suppression — ne mouvemente le stock, cf. quotation.service.ts
-// « AUCUN mouvement de stock, jamais ». Rien à écouter en temps réel sur cet écran.)
+// (pas de socket.io pour le stock ici : contrairement à une vente, aucune action sur un
+// devis — création, modification, conversion, suppression — ne mouvemente le stock, cf.
+// quotation.service.ts « AUCUN mouvement de stock, jamais ». Une connexion socket dédiée
+// est en revanche ouverte dans QuotationDetailView pour les événements de génération PDF
+// (S34, pdf:ready / pdf:generateFailed), sans lien avec le stock.)
 
 /** Liste paginée des devis, filtrable par client/entrepôt/statut. */
 function useQuotations(
@@ -202,6 +208,23 @@ function useSendQuotation(quotationId: string) {
   return useMutation({
     mutationFn: (data: { channel: SendChannel }) =>
       api.post<SendQuotationResponse>(`/quotations/${quotationId}/send`, data),
+  });
+}
+
+interface DownloadPdfResponse { status: 'queued' }
+
+/**
+ * Déclenche la génération asynchrone du PDF du devis (S34 — job BullMQ + Puppeteer côté
+ * serveur). La réponse 202 confirme uniquement la mise en file d'attente, jamais la
+ * disponibilité du fichier : celle-ci n'est connue qu'à la réception de l'événement Socket.io
+ * `pdf:ready` (écouté dans QuotationDetailView, filtré sur documentType/documentId).
+ * N'invalide aucune query : la génération ne modifie aucune donnée du devis. `api.post` exige
+ * un corps de requête typé — `{}` mirror le patron déjà utilisé pour les mutations sans
+ * payload (cf. useConvertQuotation).
+ */
+function useDownloadQuotationPdf(quotationId: string) {
+  return useMutation({
+    mutationFn: () => api.post<DownloadPdfResponse>(`/quotations/${quotationId}/pdf`, {}),
   });
 }
 
@@ -485,6 +508,8 @@ function QuotationDetailView({
   // sans que les deux ne s'activent simultanément puisque la mutation est partagée entre eux.
   const [sendingChannel, setSendingChannel] = useState<SendChannel | null>(null);
   const [convertTarget, setConvertTarget] = useState<{ id: string; reference: string } | null>(null);
+  const downloadPdfMutation = useDownloadQuotationPdf(quotation.id);
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'generating'>('idle');
 
   /**
    * Déclenche l'envoi asynchrone du récapitulatif du devis. L'API répond 202 dès la mise
@@ -518,6 +543,50 @@ function QuotationDetailView({
       toast.error(err instanceof Error ? err.message : 'Erreur lors de la conversion.');
     }
   }
+
+  /**
+   * Déclenche la génération asynchrone du PDF du devis. La réponse 202 confirme uniquement
+   * la mise en file : le bouton reste en état « Génération… » jusqu'à l'événement Socket.io
+   * `pdf:ready` (ou `pdf:generateFailed`) — jamais de « Téléchargé » avant cette confirmation
+   * (vocabulaire continu, docs/ux/standards.md). Seul un échec de la requête POST elle-même
+   * (pas du job) ramène l'état à idle ici ; l'échec du job est géré par l'écoute socket.
+   */
+  async function handleDownloadPdf() {
+    setPdfStatus('generating');
+    try {
+      await downloadPdfMutation.mutateAsync();
+      toast.success('Génération du PDF en cours…');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Erreur lors de la génération du PDF.');
+      setPdfStatus('idle');
+    }
+  }
+
+  // Socket.io — écoute dédiée des événements de génération PDF (S34) pour le devis affiché.
+  // Aucune autre connexion socket n'existe sur cet écran (pas de mouvement de stock sur un
+  // devis) : cette connexion est ouverte au niveau du détail pour comparer chaque événement
+  // à quotation.id de l'élément actuellement ouvert dans le Sheet.
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') ?? '';
+    const socket: Socket = io(WS_URL + '/realtime', {
+      auth: { token },
+      transports: ['websocket'],
+    });
+    socket.on('pdf:ready', (payload: { documentType: string; documentId: string; url: string }) => {
+      if (payload.documentType === 'quotation' && payload.documentId === quotation.id) {
+        setPdfStatus('idle');
+        toast.success('PDF téléchargé.');
+        window.open(payload.url, '_blank', 'noopener,noreferrer');
+      }
+    });
+    socket.on('pdf:generateFailed', (payload: { documentType: string; documentId: string }) => {
+      if (payload.documentType === 'quotation' && payload.documentId === quotation.id) {
+        setPdfStatus('idle');
+        toast.error('Erreur lors de la génération du PDF.');
+      }
+    });
+    return () => { socket.disconnect(); };
+  }, [quotation.id]);
 
   // Raison de désactivation des boutons d'envoi — statut non-brouillon ou contact absent
   // (§ instructions S28 : désactivés aussi si quotation.status !== 'PENDING').
@@ -595,6 +664,17 @@ function QuotationDetailView({
             {smsDisabledReason ?? 'Envoyer le récapitulatif par SMS'}
           </TooltipContent>
         </Tooltip>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={pdfStatus === 'generating'}
+          onClick={() => void handleDownloadPdf()}
+        >
+          {pdfStatus === 'generating'
+            ? 'Génération…'
+            : (<><Download className="h-3.5 w-3.5" />Télécharger en PDF</>)}
+        </Button>
       </div>
 
       {quotation.notes && (

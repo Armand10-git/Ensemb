@@ -127,6 +127,7 @@ describe('QuotationService', () => {
     const rtMock    = { server: { to: jest.fn().mockReturnValue({ emit: toEmit }) } };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
     const smsQueueMock   = { add: jest.fn().mockResolvedValue(undefined) };
+    const pdfQueueMock   = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -136,6 +137,7 @@ describe('QuotationService', () => {
         { provide: RealtimeGateway, useValue: rtMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
         { provide: getQueueToken('sms'), useValue: smsQueueMock },
+        { provide: getQueueToken('pdf'), useValue: pdfQueueMock },
       ],
     }).compile();
 

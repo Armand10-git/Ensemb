@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Trash2, Eye, ChevronLeft, ChevronRight, Undo2, Plus, CheckCircle2 } from 'lucide-react';
+import { Trash2, Eye, ChevronLeft, ChevronRight, Undo2, Plus, CheckCircle2, Download } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -189,6 +189,23 @@ function useCreateSaleReturnPayment(saleReturnId: string) {
   });
 }
 
+interface DownloadPdfResponse { status: 'queued' }
+
+/**
+ * Déclenche la génération asynchrone du PDF du retour de vente (S34 — job BullMQ + Puppeteer
+ * côté serveur). La réponse 202 confirme uniquement la mise en file d'attente, jamais la
+ * disponibilité du fichier : celle-ci n'est connue qu'à la réception de l'événement Socket.io
+ * `pdf:ready` (écouté dans SaleReturnDetailView, filtré sur documentType/documentId).
+ * N'invalide aucune query : la génération ne modifie aucune donnée du retour. `api.post` exige
+ * un corps de requête typé — `{}` mirror le patron déjà utilisé pour les mutations sans
+ * payload (cf. useValidateSaleReturn).
+ */
+function useDownloadSaleReturnPdf(saleReturnId: string) {
+  return useMutation({
+    mutationFn: () => api.post<DownloadPdfResponse>(`/sale-returns/${saleReturnId}/pdf`, {}),
+  });
+}
+
 // ─── Badges de statut ──────────────────────────────────────────────────────────
 
 function PaymentBadge({ status }: { status: PaymentStatus }) {
@@ -361,6 +378,8 @@ function SaleReturnDetailView({
 
   const { data: payments, isLoading: paymentsLoading, isError: paymentsError } = useSaleReturnPayments(saleReturn.id);
   const createRefundMutation = useCreateSaleReturnPayment(saleReturn.id);
+  const downloadPdfMutation = useDownloadSaleReturnPdf(saleReturn.id);
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'generating'>('idle');
 
   // Solde restant — affichage uniquement, le serveur reste l'arbitre du calcul réel (§17 point A).
   const remaining = Math.max(Number(saleReturn.grandTotal) - Number(saleReturn.paidAmount), 0);
@@ -374,6 +393,49 @@ function SaleReturnDetailView({
       toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement du remboursement.");
     }
   }
+
+  /**
+   * Déclenche la génération asynchrone du PDF du retour de vente. La réponse 202 confirme
+   * uniquement la mise en file : le bouton reste en état « Génération… » jusqu'à l'événement
+   * Socket.io `pdf:ready` (ou `pdf:generateFailed`) — jamais de « Téléchargé » avant cette
+   * confirmation (vocabulaire continu, docs/ux/standards.md). Seul un échec de la requête POST
+   * elle-même (pas du job) ramène l'état à idle ici ; l'échec du job est géré par l'écoute socket.
+   */
+  async function handleDownloadPdf() {
+    setPdfStatus('generating');
+    try {
+      await downloadPdfMutation.mutateAsync();
+      toast.success('Génération du PDF en cours…');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Erreur lors de la génération du PDF.');
+      setPdfStatus('idle');
+    }
+  }
+
+  // Socket.io — écoute dédiée des événements de génération PDF (S34) pour le retour affiché.
+  // Connexion propre au détail (distincte de celle de SaleReturnsPage sur stock:updated) afin
+  // de comparer chaque événement à saleReturn.id de l'élément actuellement ouvert dans le Sheet.
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') ?? '';
+    const socket: Socket = io(WS_URL + '/realtime', {
+      auth: { token },
+      transports: ['websocket'],
+    });
+    socket.on('pdf:ready', (payload: { documentType: string; documentId: string; url: string }) => {
+      if (payload.documentType === 'saleReturn' && payload.documentId === saleReturn.id) {
+        setPdfStatus('idle');
+        toast.success('PDF téléchargé.');
+        window.open(payload.url, '_blank', 'noopener,noreferrer');
+      }
+    });
+    socket.on('pdf:generateFailed', (payload: { documentType: string; documentId: string }) => {
+      if (payload.documentType === 'saleReturn' && payload.documentId === saleReturn.id) {
+        setPdfStatus('idle');
+        toast.error('Erreur lors de la génération du PDF.');
+      }
+    });
+    return () => { socket.disconnect(); };
+  }, [saleReturn.id]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -399,6 +461,19 @@ function SaleReturnDetailView({
             {saleReturn.sale?.reference ?? saleReturn.saleId} — {saleReturn.warehouse?.name ?? saleReturn.warehouseId}
           </p>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={pdfStatus === 'generating'}
+          onClick={() => void handleDownloadPdf()}
+        >
+          {pdfStatus === 'generating'
+            ? 'Génération…'
+            : (<><Download className="h-3.5 w-3.5" />Télécharger en PDF</>)}
+        </Button>
       </div>
 
       {saleReturn.notes && (

@@ -788,3 +788,56 @@ describe('POST /api/v1/sales/:id/send', () => {
     expect(auditLog!.actorType).toBe('USER');
   });
 });
+
+describe('POST /api/v1/sales/:id/pdf', () => {
+  async function createSale(): Promise<string> {
+    const created = await asA('post', '/api/v1/sales').send({
+      clientId: clientAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — enfile le job de génération PDF', async () => {
+    const saleId = await createSale();
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/pdf`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it('404 — vente inexistante', async () => {
+    const res = await asA('post', '/api/v1/sales/00000000-0000-0000-0000-000000000000/pdf').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas générer le PDF d\'une vente de org A', async () => {
+    const saleId = await createSale();
+
+    const res = await asB('post', `/api/v1/sales/${saleId}/pdf`).send();
+
+    expect(res.status).toBe(403);
+  });
+
+  it('202 — AuditLog tracé (action sales.generatePdf) après enfilage réussi', async () => {
+    const saleId = await createSale();
+
+    const res = await asA('post', `/api/v1/sales/${saleId}/pdf`).send();
+    expect(res.status).toBe(202);
+
+    // AuditInterceptor persiste l'AuditLog en fire-and-forget (void, non attendu par la
+    // réponse HTTP) — mirror exact du test AuditLog de POST /sales/:id/send ci-dessus.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const auditLog = await prisma.auditLog.findFirst({
+      where: { entity: 'Sale', entityId: saleId, action: 'sales.generatePdf' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(auditLog).not.toBeNull();
+    expect(auditLog!.actorType).toBe('USER');
+  });
+});

@@ -16,6 +16,8 @@ import { PosPaymentExpirationQueueModule } from '../modules/pos/pos-payment-expi
 import { SaleOnlinePaymentExpirationQueueModule } from '../modules/sales/sale-online-payment-expiration-queue.module';
 import { MessagingModule } from '../modules/messaging/messaging.module';
 import { MessagingQueueModule } from '../modules/messaging/messaging-queue.module';
+import { PdfModule } from '../modules/pdf/pdf.module';
+import { PdfQueueModule } from '../modules/pdf/pdf-queue.module';
 import { BillingWorker } from './billing.worker';
 import { BackupWorker } from './backup.worker';
 import { ExcelWorker } from './excel.worker';
@@ -31,6 +33,10 @@ import { PaymentReceiptEmailWorker } from './payment-receipt-email.worker';
 import { PaymentReceiptSmsWorker } from './payment-receipt-sms.worker';
 import { ReturnEmailWorker } from './return-email.worker';
 import { ReturnSmsWorker } from './return-sms.worker';
+import { SalePdfWorker } from './sale-pdf.worker';
+import { PurchasePdfWorker } from './purchase-pdf.worker';
+import { QuotationPdfWorker } from './quotation-pdf.worker';
+import { ReturnPdfWorker } from './return-pdf.worker';
 
 /**
  * Module chargé uniquement dans le process worker dédié (apps/api/src/worker.ts).
@@ -91,6 +97,12 @@ import { ReturnSmsWorker } from './return-sms.worker';
     // Enregistre les files 'email' et 'sms' (nécessaire pour @Processor('email')/@Processor('sms')) —
     // module dédié plutôt que d'importer un module métier, même patron que PosPaymentExpirationQueueModule
     MessagingQueueModule,
+    // PdfModule exporte PdfService (S34, SalePdfWorker/PurchasePdfWorker/QuotationPdfWorker/
+    // ReturnPdfWorker) — injecte aussi StorageService (exporté globalement par UploadsModule).
+    PdfModule,
+    // Enregistre la file 'pdf' (nécessaire pour @Processor('pdf')) — module dédié, même
+    // patron que MessagingQueueModule.
+    PdfQueueModule,
   ],
   providers: [
     BillingWorker,
@@ -108,6 +120,10 @@ import { ReturnSmsWorker } from './return-sms.worker';
     PaymentReceiptSmsWorker,
     ReturnEmailWorker,
     ReturnSmsWorker,
+    SalePdfWorker,
+    PurchasePdfWorker,
+    QuotationPdfWorker,
+    ReturnPdfWorker,
   ],
 })
 export class WorkerModule {}

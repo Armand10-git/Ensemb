@@ -53,6 +53,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   PATCH  /api/v1/purchases/:id         → 200 (PENDING uniquement)
  *   PATCH  /api/v1/purchases/:id/validate → 200 (PENDING → COMPLETED, incrémente le stock)
  *   POST   /api/v1/purchases/:id/send    → 202 (S32 — envoi asynchrone du récapitulatif par email)
+ *   POST   /api/v1/purchases/:id/pdf     → 202 (S34 — génération PDF asynchrone, brandée)
  *   DELETE /api/v1/purchases/:id         → 204 (PENDING uniquement)
  *
  * Pas de route /cancel dans cette session — purchases.cancel existe en permission mais
@@ -197,6 +198,26 @@ export class PurchaseController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.purchaseService.send(id, req.user.organizationId, result.data.channel);
+  }
+
+  /**
+   * POST /api/v1/purchases/:id/pdf
+   * Enfile la génération PDF brandée de l'achat (S34, mirror exact de POST /sales/:id/pdf) —
+   * job BullMQ traité de façon asynchrone (202 Accepted). Le frontend écoute l'événement
+   * temps réel `pdf:ready` (org-scopé) pour récupérer l'URL signée du PDF généré.
+   *
+   * Réutilise la permission `purchases.view` plutôt qu'une nouvelle permission dédiée —
+   * même décision que send().
+   */
+  @RequirePermission('purchases.view')
+  @Post(':id/pdf')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'purchases.generatePdf', entity: 'Purchase' })
+  generatePdf(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.purchaseService.generatePdf(id, req.user.organizationId, req.user.id);
   }
 
   /**

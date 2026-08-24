@@ -4,6 +4,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationModule } from '../notifications/notification.module';
 import { MessagingQueueModule } from '../messaging/messaging-queue.module';
+import { PdfQueueModule } from '../pdf/pdf-queue.module';
 import { PaymentGatewayModule } from '../payment-gateway/payment-gateway.module';
 import { SaleService } from './sale.service';
 import { SaleController } from './sale.controller';
@@ -41,6 +42,7 @@ import { SaleOnlinePaymentExpirationQueueModule } from './sale-online-payment-ex
     InventoryModule,
     NotificationModule,
     MessagingQueueModule,
+    PdfQueueModule,
     PaymentGatewayModule,
     SaleOnlinePaymentExpirationQueueModule,
   ],

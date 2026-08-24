@@ -12,6 +12,7 @@ import { DocumentStatus, DocumentType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { DocumentCounterService } from '../../common/document-counter.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { pdfJobName, type PdfJobData } from '../pdf/pdf-job.types';
 import type { CreateQuotationDto, QuotationDetailDto } from './dto/create-quotation.dto';
 import type { UpdateQuotationDto } from './dto/update-quotation.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -156,6 +157,9 @@ export class QuotationService {
     private readonly emailQueue: Queue<{ organizationId: string; quotationId: string; to: string }>,
     @InjectQueue('sms')
     private readonly smsQueue: Queue<{ organizationId: string; quotationId: string; to: string }>,
+    // File BullMQ de génération PDF (S34) — mirror exact d'emailQueue/smsQueue.
+    @InjectQueue('pdf')
+    private readonly pdfQueue: Queue<PdfJobData>,
   ) {}
 
   /**
@@ -479,6 +483,42 @@ export class QuotationService {
       throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
     }
     await this.smsQueue.add('quotation.sendSms', { organizationId, quotationId: id, to });
+    return { status: 'queued' };
+  }
+
+  /**
+   * Enfile la génération PDF du devis (S34) — mirror exact de SaleService.generatePdf.
+   *
+   * @param id - identifiant du devis à générer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param requestedBy - utilisateur ayant déclenché la génération (traçabilité uniquement).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé.
+   * @throws NotFoundException si le devis est introuvable ou soft-supprimé.
+   * @throws ForbiddenException si le devis n'appartient pas à l'organisation.
+   */
+  async generatePdf(
+    id: string,
+    organizationId: string,
+    requestedBy: string,
+  ): Promise<{ status: 'queued' }> {
+    const quotation = await this.prisma.quotation.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, deletedAt: true },
+    });
+
+    if (!quotation || quotation.deletedAt !== null) {
+      throw new NotFoundException('Devis introuvable.');
+    }
+    if (quotation.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    await this.pdfQueue.add(pdfJobName('quotation'), {
+      organizationId,
+      documentType: 'quotation',
+      documentId: id,
+      requestedBy,
+    });
     return { status: 'queued' };
   }
 

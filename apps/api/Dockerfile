@@ -13,6 +13,12 @@ FROM node:20-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 WORKDIR /repo
 
+# PUPPETEER_SKIP_DOWNLOAD (S34) : le Chromium glibc que puppeteer téléchargerait par défaut
+# à l'install ne fonctionne pas sur musl (node:20-alpine) — inutile de le télécharger dans ce
+# stage. Le stage runner installe à la place un Chromium natif Alpine via apk (voir plus bas),
+# référencé par PUPPETEER_EXECUTABLE_PATH au runtime (cf. PdfService.render()).
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 COPY . .
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
@@ -39,6 +45,34 @@ ENV NODE_ENV=production
 # OpenSSL 1.1 (absente d'Alpine 3.17+, qui embarque OpenSSL 3.0) au lieu de la variante
 # linux-musl-openssl-3.0.x générée pour cette cible (cf. schema.prisma).
 RUN apk add --no-cache openssl
+
+# Chromium natif Alpine (S34, pdf-queue) : remplace le Chromium glibc non-fonctionnel que
+# puppeteer téléchargerait par défaut (skippé dans le stage builder, cf. PUPPETEER_SKIP_DOWNLOAD
+# ci-dessus). nss/freetype/harfbuzz/ca-certificates/ttf-freefont sont les dépendances système
+# habituelles de Chromium headless sur Alpine (rendu de police, TLS pour l'URL du logo brandé).
+#
+# ÉCHEC CONNU, NON RÉSOLU (S34) — build actuellement cassé sur ce stage : le paquet `chromium`
+# de la branche stable de cette image (Alpine 3.23) a un index de dépendances transitives
+# incohérent au moment de cette session (`so:libnssutil3.so`/`so:libpango...`/`so:libpulse...`
+# etc. « no such package », des libs sans rapport entre elles — signe d'un déséquilibre de
+# version entre le paquet chromium et le reste du snapshot stable, pas d'une dépendance
+# manquante côté Dockerfile). Tirer `chromium` depuis `edge/community` (testé, `--repository=
+# https://dl-cdn.alpinelinux.org/alpine/edge/community chromium`) NE RÉSOUT PAS non plus le
+# problème — la version alors publiée par edge (151.0.7922.173) manque à son tour une lib
+# différente (`so:libFLAC.so.14`) : l'incohérence est mouvante d'un run à l'autre, pas un simple
+# ensemble de paquets à ajouter. À traiter en tâche DevOps séparée (image de base alternative
+# type Debian slim avec `apt install chromium`, ou image Puppeteer maintenue en amont) avant
+# tout déploiement — ce stage build échoue tel quel, non vérifié par un build Docker réussi.
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 RUN addgroup --system --gid 1001 nodejs \
  && adduser  --system --uid 1001 nestjs

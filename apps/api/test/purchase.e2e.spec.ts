@@ -814,6 +814,41 @@ describe('POST /api/v1/purchases/:id/send', () => {
   });
 });
 
+describe('POST /api/v1/purchases/:id/pdf', () => {
+  async function createPurchase(): Promise<string> {
+    const created = await asA('post', '/api/v1/purchases').send({
+      providerId: providerAId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — enfile le job de génération PDF', async () => {
+    const purchaseId = await createPurchase();
+
+    const res = await asA('post', `/api/v1/purchases/${purchaseId}/pdf`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it('404 — achat inexistant', async () => {
+    const res = await asA('post', '/api/v1/purchases/00000000-0000-0000-0000-000000000000/pdf').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas générer le PDF d\'un achat de org A', async () => {
+    const purchaseId = await createPurchase();
+
+    const res = await asB('post', `/api/v1/purchases/${purchaseId}/pdf`).send();
+
+    expect(res.status).toBe(403);
+  });
+});
+
 // ─── POST /purchases/payments/:id/send (S32/S33) ───────────────────────────────
 // Envoie le reçu d'un paiement d'achat au fournisseur par email ou SMS — mirror exact du
 // describe précédent, sur le paiement plutôt que sur l'achat.

@@ -55,6 +55,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   PATCH  /api/v1/sales/:id/validate → 200 (S21 — PENDING → COMPLETED, mouvemente le stock)
  *   PATCH  /api/v1/sales/:id/cancel  → 200 (S21b — COMPLETED → CANCELLED, restitue le stock)
  *   POST   /api/v1/sales/:id/send    → 202 (S24 — envoi asynchrone du récapitulatif par email/SMS)
+ *   POST   /api/v1/sales/:id/pdf     → 202 (S34 — génération PDF asynchrone, brandée)
  *   DELETE /api/v1/sales/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -220,6 +221,28 @@ export class SaleController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.saleService.send(id, req.user.organizationId, result.data.channel);
+  }
+
+  /**
+   * POST /api/v1/sales/:id/pdf
+   * Enfile la génération PDF brandée de la vente (S34) — job BullMQ traité de façon
+   * asynchrone par un worker dédié (202 Accepted, pas d'attente du rendu Puppeteer). Le
+   * frontend écoute l'événement temps réel `pdf:ready` (org-scopé) pour récupérer l'URL
+   * signée du PDF généré.
+   *
+   * Réutilise la permission `sales.view` plutôt qu'une nouvelle permission dédiée — même
+   * décision que send() (S24) : générer un PDF est une action sur une ressource déjà
+   * consultable par l'utilisateur, pas une mutation de la vente elle-même.
+   */
+  @RequirePermission('sales.view')
+  @Post(':id/pdf')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'sales.generatePdf', entity: 'Sale' })
+  generatePdf(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.saleService.generatePdf(id, req.user.organizationId, req.user.id);
   }
 
   /**

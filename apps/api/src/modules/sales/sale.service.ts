@@ -19,6 +19,7 @@ import {
   OptimisticLockException,
 } from '../inventory/product-warehouse.service';
 import { NotificationService } from '../notifications/notification.service';
+import { pdfJobName, type PdfJobData } from '../pdf/pdf-job.types';
 import type { CreateSaleDto, SaleDetailDto } from './dto/create-sale.dto';
 import type { UpdateSaleDto } from './dto/update-sale.dto';
 import type { PaginatedResult } from '../../common/types';
@@ -187,6 +188,10 @@ export class SaleService {
     private readonly emailQueue: Queue<{ organizationId: string; saleId: string; to: string }>,
     @InjectQueue('sms')
     private readonly smsQueue: Queue<{ organizationId: string; saleId: string; to: string }>,
+    // File BullMQ de génération PDF (S34) — le worker recharge lui-même la vente à partir
+    // de documentId, mirror exact d'emailQueue/smsQueue.
+    @InjectQueue('pdf')
+    private readonly pdfQueue: Queue<PdfJobData>,
   ) {}
 
   /**
@@ -584,6 +589,44 @@ export class SaleService {
       throw new BadRequestException("Ce client n'a pas de numéro de téléphone enregistré.");
     }
     await this.smsQueue.add('sale.sendSms', { organizationId, saleId: id, to });
+    return { status: 'queued' };
+  }
+
+  /**
+   * Enfile la génération PDF de la vente (S34) — le worker recharge la vente, rend le
+   * document brandé et l'uploade sur S3 de façon asynchrone (pas d'attente du rendu
+   * Puppeteer dans le cycle requête/réponse, §17 point Z).
+   *
+   * @param id - identifiant de la vente à générer.
+   * @param organizationId - organisation de l'utilisateur authentifié (anti-IDOR).
+   * @param requestedBy - utilisateur ayant déclenché la génération (traçabilité uniquement).
+   * @returns `{ status: 'queued' }` dès que le job est enfilé (pas d'attente du rendu réel).
+   * @throws NotFoundException si la vente est introuvable ou soft-supprimée.
+   * @throws ForbiddenException si la vente n'appartient pas à l'organisation.
+   */
+  async generatePdf(
+    id: string,
+    organizationId: string,
+    requestedBy: string,
+  ): Promise<{ status: 'queued' }> {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, deletedAt: true },
+    });
+
+    if (!sale || sale.deletedAt !== null) {
+      throw new NotFoundException('Vente introuvable.');
+    }
+    if (sale.organizationId !== organizationId) {
+      throw new ForbiddenException('Accès refusé.');
+    }
+
+    await this.pdfQueue.add(pdfJobName('sale'), {
+      organizationId,
+      documentType: 'sale',
+      documentId: id,
+      requestedBy,
+    });
     return { status: 'queued' };
   }
 
