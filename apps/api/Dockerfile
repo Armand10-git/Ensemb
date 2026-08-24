@@ -51,19 +51,20 @@ RUN apk add --no-cache openssl
 # ci-dessus). nss/freetype/harfbuzz/ca-certificates/ttf-freefont sont les dépendances système
 # habituelles de Chromium headless sur Alpine (rendu de police, TLS pour l'URL du logo brandé).
 #
-# --repository=...edge/community : le paquet `chromium` de la branche stable de cette image
-# (Alpine 3.23) a un index de dépendances transitives incohérent au moment de cette session
-# (`apk add chromium` échoue sur des `so:*.so (no such package)` pour des libs sans rapport
-# entre elles — libnssutil3/libpango/libpulse/etc. — signe d'un déséquilibre de version entre
-# le paquet chromium et le reste du snapshot stable, pas d'une dépendance manquante côté
-# Dockerfile). La branche edge/community republie fréquemment un jeu de paquets chromium
-# cohérent entre eux ; seule `chromium` en est tirée depuis edge, le reste (`nss`/`freetype`/…)
-# reste résolu depuis les dépôts par défaut de l'image pour ne pas mélanger inutilement les
-# versions de la libc/musl avec la branche stable.
+# ÉCHEC CONNU, NON RÉSOLU (S34) — build actuellement cassé sur ce stage : le paquet `chromium`
+# de la branche stable de cette image (Alpine 3.23) a un index de dépendances transitives
+# incohérent au moment de cette session (`so:libnssutil3.so`/`so:libpango...`/`so:libpulse...`
+# etc. « no such package », des libs sans rapport entre elles — signe d'un déséquilibre de
+# version entre le paquet chromium et le reste du snapshot stable, pas d'une dépendance
+# manquante côté Dockerfile). Tirer `chromium` depuis `edge/community` (testé, `--repository=
+# https://dl-cdn.alpinelinux.org/alpine/edge/community chromium`) NE RÉSOUT PAS non plus le
+# problème — la version alors publiée par edge (151.0.7922.173) manque à son tour une lib
+# différente (`so:libFLAC.so.14`) : l'incohérence est mouvante d'un run à l'autre, pas un simple
+# ensemble de paquets à ajouter. À traiter en tâche DevOps séparée (image de base alternative
+# type Debian slim avec `apt install chromium`, ou image Puppeteer maintenue en amont) avant
+# tout déploiement — ce stage build échoue tel quel, non vérifié par un build Docker réussi.
 RUN apk add --no-cache \
-    --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community \
     chromium \
- && apk add --no-cache \
     nss \
     freetype \
     freetype-dev \
