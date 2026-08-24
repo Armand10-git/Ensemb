@@ -54,6 +54,7 @@ function parsePagination(page: unknown, limit: unknown) {
  *   PATCH  /api/v1/quotations/:id         → 200 (PENDING uniquement)
  *   POST   /api/v1/quotations/:id/convert → 201 (S28 — PENDING → COMPLETED, crée une Sale)
  *   POST   /api/v1/quotations/:id/send    → 202 (envoi asynchrone du récapitulatif par email/SMS)
+ *   POST   /api/v1/quotations/:id/pdf     → 202 (S34 — génération PDF asynchrone, brandée)
  *   DELETE /api/v1/quotations/:id         → 204 (PENDING uniquement)
  */
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -191,6 +192,26 @@ export class QuotationController {
       throw new UnprocessableEntityException(result.error.flatten().fieldErrors);
     }
     return this.quotationService.send(id, req.user.organizationId, result.data.channel);
+  }
+
+  /**
+   * POST /api/v1/quotations/:id/pdf
+   * Enfile la génération PDF brandée du devis (S34, mirror exact de POST /sales/:id/pdf) —
+   * job BullMQ traité de façon asynchrone (202 Accepted). Le frontend écoute l'événement
+   * temps réel `pdf:ready` (org-scopé) pour récupérer l'URL signée du PDF généré.
+   *
+   * Réutilise la permission `quotations.view` plutôt qu'une nouvelle permission dédiée —
+   * même décision que send().
+   */
+  @RequirePermission('quotations.view')
+  @Post(':id/pdf')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Auditable({ action: 'quotations.generatePdf', entity: 'Quotation' })
+  generatePdf(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.quotationService.generatePdf(id, req.user.organizationId, req.user.id);
   }
 
   /**

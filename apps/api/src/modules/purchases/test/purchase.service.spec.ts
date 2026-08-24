@@ -137,6 +137,7 @@ describe('PurchaseService', () => {
     const pwMock = { adjustStock: jest.fn() };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
     const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const pdfQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -147,6 +148,7 @@ describe('PurchaseService', () => {
         { provide: ProductWarehouseService, useValue: pwMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
         { provide: getQueueToken('sms'), useValue: smsQueueMock },
+        { provide: getQueueToken('pdf'), useValue: pdfQueueMock },
       ],
     }).compile();
 

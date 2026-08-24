@@ -111,6 +111,7 @@ describe('PurchaseReturnService', () => {
     const notifMock = { createForOrg: jest.fn().mockResolvedValue(undefined) };
     const emailQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
     const smsQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
+    const pdfQueueMock = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -122,6 +123,7 @@ describe('PurchaseReturnService', () => {
         { provide: NotificationService, useValue: notifMock },
         { provide: getQueueToken('email'), useValue: emailQueueMock },
         { provide: getQueueToken('sms'), useValue: smsQueueMock },
+        { provide: getQueueToken('pdf'), useValue: pdfQueueMock },
       ],
     }).compile();
 

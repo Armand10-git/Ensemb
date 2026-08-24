@@ -600,6 +600,41 @@ describe('POST /api/v1/quotations/:id/send', () => {
   });
 });
 
+describe('POST /api/v1/quotations/:id/pdf', () => {
+  async function createQuotationForClient(clientId: string): Promise<string> {
+    const created = await asA('post', '/api/v1/quotations').send({
+      clientId,
+      warehouseId: warehouseAId,
+      date: '2026-07-26T00:00:00.000Z',
+      details: [{ productId: productAId, price: '1000', quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — enfile le job de génération PDF', async () => {
+    const quotationId = await createQuotationForClient(clientAId);
+
+    const res = await asA('post', `/api/v1/quotations/${quotationId}/pdf`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it('404 — devis inexistant', async () => {
+    const res = await asA('post', '/api/v1/quotations/00000000-0000-0000-0000-000000000000/pdf').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas générer le PDF d\'un devis de org A', async () => {
+    const quotationId = await createQuotationForClient(clientAId);
+
+    const res = await asB('post', `/api/v1/quotations/${quotationId}/pdf`).send();
+
+    expect(res.status).toBe(403);
+  });
+});
+
 // ─── DELETE /quotations/:id ─────────────────────────────────────────────────────
 
 describe('DELETE /api/v1/quotations/:id', () => {

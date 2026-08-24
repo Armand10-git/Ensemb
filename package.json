@@ -32,7 +32,8 @@
       "prisma",
       "@nestjs/core",
       "esbuild",
-      "unrs-resolver"
+      "unrs-resolver",
+      "puppeteer"
     ]
   },
   "engines": {

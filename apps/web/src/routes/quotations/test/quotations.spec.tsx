@@ -267,6 +267,18 @@ describe('QuotationsPage — Envoi email/SMS', () => {
     await waitFor(() => expect(screen.getByText('Envoi en cours…')).toBeInTheDocument());
     expect(mockApi.post).toHaveBeenCalledWith(`/quotations/${QUOTATION_ID}/send`, { channel: 'email' });
   });
+
+  // Mirror du test d'envoi ci-dessus, pour le bouton de génération de PDF (S34).
+  it('le clic sur "Télécharger en PDF" appelle POST /quotations/:id/pdf et affiche le toast de mise en file', async () => {
+    mockGet(makeQuotation());
+    mockApi.post.mockResolvedValue({ status: 'queued' });
+    await openDetail();
+
+    await userEvent.click(screen.getByRole('button', { name: /Télécharger en PDF/ }));
+
+    await waitFor(() => expect(screen.getByText('Génération du PDF en cours…')).toBeInTheDocument());
+    expect(mockApi.post).toHaveBeenCalledWith(`/quotations/${QUOTATION_ID}/pdf`, {});
+  });
 });
 
 // ─── Détail — conversion en vente ──────────────────────────────────────────────

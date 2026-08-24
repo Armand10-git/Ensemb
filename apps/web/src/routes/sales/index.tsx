@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban, Mail, MessageSquare, Undo2 } from 'lucide-react';
+import { Plus, Trash2, Eye, ChevronLeft, ChevronRight, ReceiptText, Ban, Mail, MessageSquare, Undo2, Download } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatXAF, formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -271,6 +271,23 @@ function useSendSale(saleId: string) {
   return useMutation({
     mutationFn: (data: { channel: SendChannel }) =>
       api.post<SendSaleResponse>(`/sales/${saleId}/send`, data),
+  });
+}
+
+interface DownloadPdfResponse { status: 'queued' }
+
+/**
+ * Déclenche la génération asynchrone du PDF de la vente (S34 — job BullMQ + Puppeteer côté
+ * serveur). La réponse 202 confirme uniquement la mise en file d'attente, jamais la
+ * disponibilité du fichier : celle-ci n'est connue qu'à la réception de l'événement Socket.io
+ * `pdf:ready` (écouté dans SaleDetailView, filtré sur documentType/documentId). N'invalide
+ * aucune query : la génération ne modifie aucune donnée de la vente. `api.post` exige un
+ * corps de requête typé — `{}` mirror le patron déjà utilisé pour les mutations sans payload
+ * (cf. useValidateSale).
+ */
+function useDownloadSalePdf(saleId: string) {
+  return useMutation({
+    mutationFn: () => api.post<DownloadPdfResponse>(`/sales/${saleId}/pdf`, {}),
   });
 }
 
@@ -806,6 +823,8 @@ function SaleDetailView({
   // Canal en cours d'envoi — permet de désactiver/faire tourner le bon bouton (email OU sms)
   // sans que les deux ne s'activent simultanément puisque la mutation est partagée entre eux.
   const [sendingChannel, setSendingChannel] = useState<SendChannel | null>(null);
+  const downloadPdfMutation = useDownloadSalePdf(sale.id);
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'generating'>('idle');
 
   // Solde restant — affichage uniquement, le serveur reste l'arbitre du calcul réel (§17 point A).
   const remaining = Math.max(Number(sale.grandTotal) - Number(sale.paidAmount), 0);
@@ -852,6 +871,49 @@ function SaleDetailView({
       setSendingChannel(null);
     }
   }
+
+  /**
+   * Déclenche la génération asynchrone du PDF de la vente. La réponse 202 confirme uniquement
+   * la mise en file : le bouton reste en état « Génération… » jusqu'à l'événement Socket.io
+   * `pdf:ready` (ou `pdf:generateFailed`) — jamais de « Téléchargé » avant cette confirmation
+   * (vocabulaire continu, docs/ux/standards.md). Seul un échec de la requête POST elle-même
+   * (pas du job) ramène l'état à idle ici ; l'échec du job est géré par l'écoute socket.
+   */
+  async function handleDownloadPdf() {
+    setPdfStatus('generating');
+    try {
+      await downloadPdfMutation.mutateAsync();
+      toast.success('Génération du PDF en cours…');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Erreur lors de la génération du PDF.');
+      setPdfStatus('idle');
+    }
+  }
+
+  // Socket.io — écoute dédiée des événements de génération PDF (S34) pour la vente affichée.
+  // Connexion propre au détail (distincte de celle de SalesPage sur stock:updated) afin de
+  // comparer chaque événement à sale.id de l'élément actuellement ouvert dans le Sheet.
+  useEffect(() => {
+    const token = localStorage.getItem('access_token') ?? '';
+    const socket: Socket = io(WS_URL + '/realtime', {
+      auth: { token },
+      transports: ['websocket'],
+    });
+    socket.on('pdf:ready', (payload: { documentType: string; documentId: string; url: string }) => {
+      if (payload.documentType === 'sale' && payload.documentId === sale.id) {
+        setPdfStatus('idle');
+        toast.success('PDF téléchargé.');
+        window.open(payload.url, '_blank', 'noopener,noreferrer');
+      }
+    });
+    socket.on('pdf:generateFailed', (payload: { documentType: string; documentId: string }) => {
+      if (payload.documentType === 'sale' && payload.documentId === sale.id) {
+        setPdfStatus('idle');
+        toast.error('Erreur lors de la génération du PDF.');
+      }
+    });
+    return () => { socket.disconnect(); };
+  }, [sale.id]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -923,6 +985,17 @@ function SaleDetailView({
               : "Ce client n'a pas de numéro de téléphone enregistré."}
           </TooltipContent>
         </Tooltip>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={pdfStatus === 'generating'}
+          onClick={() => void handleDownloadPdf()}
+        >
+          {pdfStatus === 'generating'
+            ? 'Génération…'
+            : (<><Download className="h-3.5 w-3.5" />Télécharger en PDF</>)}
+        </Button>
       </div>
 
       {sale.notes && (

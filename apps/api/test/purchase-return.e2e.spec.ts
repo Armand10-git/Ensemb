@@ -876,3 +876,39 @@ describe('POST /api/v1/purchase-returns/:id/send', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('POST /api/v1/purchase-returns/:id/pdf', () => {
+  async function createPurchaseReturn(): Promise<string> {
+    const { purchaseId, purchaseDetailId } = await createCompletedPurchaseWithDetail(orgAId, adminAId, '2');
+
+    const created = await asA('post', '/api/v1/purchase-returns').send({
+      purchaseId,
+      date: '2026-07-27T00:00:00.000Z',
+      details: [{ purchaseDetailId, quantity: '1' }],
+    });
+    return created.body.id as string;
+  }
+
+  it('202 — enfile le job de génération PDF', async () => {
+    const returnId = await createPurchaseReturn();
+
+    const res = await asA('post', `/api/v1/purchase-returns/${returnId}/pdf`).send();
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'queued' });
+  });
+
+  it('404 — retour inexistant', async () => {
+    const res = await asA('post', '/api/v1/purchase-returns/00000000-0000-0000-0000-000000000000/pdf').send();
+
+    expect(res.status).toBe(404);
+  });
+
+  it('403 — isolation tenant : org B ne peut pas générer le PDF d\'un retour de org A', async () => {
+    const returnId = await createPurchaseReturn();
+
+    const res = await asB('post', `/api/v1/purchase-returns/${returnId}/pdf`).send();
+
+    expect(res.status).toBe(403);
+  });
+});
